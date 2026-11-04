@@ -42,6 +42,18 @@
  *   get "clips"              128 chars, track-major: OG_CLIP_* state per slot
  *   get "edits"              16 chars: each track's edit clip
  *   get "lq"
+ *
+ * Recording and projects:
+ *   set "rec" "0|1"  "rtrack" "<t>"  "rquant" "0|1"  "rmode" "0=dub|1=replace"
+ *   set "click" "0=off|1=count-in|2=on"   "countin" "1" (play after 1 bar of clicks)
+ *   set "lnon" "<t> <n> <v>"  "lnoff" "<t> <n>"   live notes (recorded when armed)
+ *   set "rp" "<t> <pid> <v>"  knob move: a lock while recording, else the base value
+ *   set "rnew" "<t> <c>"  "rclose" "<t>"   record a new clip / fix its length
+ *   set "tpset" "<t> <v0>,<v1>,..."     all of a track's params at once (loading)
+ *   set "undo"  "reset"
+ *   set "cload" "<t> <c> <hex>"            restore a clip from og_clip_dump text
+ *   get "rec"        "armed,counting_in,growing_track,quant,mode,click"
+ *   get "cdump:<t>:<c>"
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -146,6 +158,48 @@ static void plug_set(void *inst, const char *key, const char *val) {
         if (parse_ints(val, a, 4) == 4) og_clip_copy(g, a[0], a[1], a[2], a[3]);
     } else if (!strcmp(key, "cclr")) {
         if (parse_ints(val, a, 2) == 2) og_clip_clear(g, a[0], a[1]);
+    } else if (!strcmp(key, "rec")) {
+        og_rec_arm(g, val && atoi(val));
+    } else if (!strcmp(key, "rtrack")) {
+        if (parse_ints(val, a, 1) == 1) og_rec_set_track(g, a[0]);
+    } else if (!strcmp(key, "rquant")) {
+        og_rec_set_quant(g, val && atoi(val));
+    } else if (!strcmp(key, "rmode")) {
+        og_rec_set_mode(g, val && atoi(val));
+    } else if (!strcmp(key, "click")) {
+        if (parse_ints(val, a, 1) == 1) og_set_click(g, a[0]);
+    } else if (!strcmp(key, "countin")) {
+        og_play_countin(g);
+    } else if (!strcmp(key, "lnon")) {
+        if (parse_ints(val, a, 3) == 3) og_live_note_on(g, a[0], a[1], a[2]);
+    } else if (!strcmp(key, "lnoff")) {
+        if (parse_ints(val, a, 2) == 2) og_live_note_off(g, a[0], a[1]);
+    } else if (!strcmp(key, "rp")) {
+        if (parse_ints(val, a, 3) == 3) og_rec_param(g, a[0], a[1], a[2]);
+    } else if (!strcmp(key, "rnew")) {
+        if (parse_ints(val, a, 2) == 2) og_rec_new_clip(g, a[0], a[1]);
+    } else if (!strcmp(key, "rclose")) {
+        if (parse_ints(val, a, 1) == 1) og_rec_close_clip(g, a[0]);
+    } else if (!strcmp(key, "tpset")) {
+        int v[1 + P_COUNT_USED];
+        int n = parse_ints(val, v, 1 + P_COUNT_USED);
+        for (int p = 0; p + 1 < n; p++) og_set_param(g, v[0], p, v[p + 1]);
+    } else if (!strcmp(key, "undo")) {
+        og_undo(g);
+    } else if (!strcmp(key, "reset")) {
+        og_reset(g);
+        in->sync = 1;
+    } else if (!strcmp(key, "cload")) {
+        /* "<t> <c> <hex>": parse the two ints, the rest is the payload */
+        if (val && parse_ints(val, a, 2) == 2) {
+            const char *p = val;
+            for (int skip = 0; skip < 2 && *p; skip++) {
+                while (*p == ' ') p++;
+                while (*p && *p != ' ') p++;
+            }
+            while (*p == ' ') p++;
+            og_clip_load(g, a[0], a[1], p);
+        }
     } else if (!strcmp(key, "fx")) {
         if (parse_ints(val, a, 2) == 2) og_set_fx(g, a[0], a[1]);
     } else if (!strcmp(key, "solo")) {
@@ -202,6 +256,14 @@ static int plug_get(void *inst, const char *key, char *buf, int buf_len) {
         for (int t = 0; t < OG_TRACKS; t++) buf[t] = (char)('0' + og_get_edit_clip(g, t));
         buf[OG_TRACKS] = 0;
         return OG_TRACKS;
+    }
+    if (!strcmp(key, "rec"))
+        return snprintf(buf, (size_t)buf_len, "%d,%d,%d,%d,%d,%d", og_rec_armed(g), og_counting_in(g),
+                        og_rec_growing(g), og_rec_quant(g), og_rec_mode(g), og_get_click(g));
+    if (!strncmp(key, "cdump:", 6)) {
+        int tc[2];
+        if (parse_ints(key + 6, tc, 2) != 2) return -1;
+        return og_clip_dump(g, tc[0], tc[1], buf, buf_len);
     }
     if (!strcmp(key, "lq")) return snprintf(buf, (size_t)buf_len, "%d", og_get_launch_quant(g));
     if (!strcmp(key, "fx")) {

@@ -45,7 +45,7 @@ static void step_reset(og_step_t *st) {
     st->rat = 1;
 }
 
-static void clip_reset(og_clip_t *c) {
+void og__clip_reset(og_clip_t *c) {
     memset(c, 0, sizeof(*c));
     for (int s = 0; s < OG_STEPS; s++) step_reset(&c->steps[s]);
     c->length = 16;
@@ -55,7 +55,7 @@ static void clip_reset(og_clip_t *c) {
 
 void og__seq_init(og_t *g) {
     for (int t = 0; t < OG_TRACKS; t++) {
-        for (int c = 0; c < OG_CLIPS; c++) clip_reset(&g->clips[t][c]);
+        for (int c = 0; c < OG_CLIPS; c++) og__clip_reset(&g->clips[t][c]);
         g->ts[t].cur_step = -1;
         g->ts[t].clip = 0;
         g->ts[t].edit = 0;
@@ -295,7 +295,7 @@ void og_clip_copy(og_t *g, int st, int sc, int dt, int dc) {
 }
 void og_clip_clear(og_t *g, int track, int clip) {
     if (!g || !track_ok(track) || !clip_ok(clip)) return;
-    clip_reset(&g->clips[track][clip]);
+    og__clip_reset(&g->clips[track][clip]);
 }
 int og_clip_length(const og_t *g, int t) { return (g && track_ok(t)) ? cur_clip_c(g, t)->length : 16; }
 int og_clip_speed(const og_t *g, int t)  { return (g && track_ok(t)) ? cur_clip_c(g, t)->speed : OG_SPEED_1X; }
@@ -407,9 +407,16 @@ static void fire(og_t *g, int track, long n, int s, int j, double at) {
 }
 
 void og__seq_advance(og_t *g, int frames) {
-    if (!g->playing) { g->sample_clock += (uint64_t)frames; return; }
     double step_samples = (double)g->sr * 60.0 / (double)g->bpm / 4.0;
+    if (!g->playing) {
+        /* a count-in that ends inside this tick starts playback right here */
+        if (og__countin_advance(g, frames, step_samples) || !g->playing) {
+            g->sample_clock += (uint64_t)frames;
+            return;
+        }
+    }
     double gs = g->gpos, ge = gs + (double)frames / step_samples;
+    og__click_beats(g, gs, ge);
 
     for (int t = 0; t < OG_TRACKS; t++) {
         og_trackseq_t *ts = &g->ts[t];
@@ -447,6 +454,8 @@ void og__seq_advance(og_t *g, int frames) {
         og_clip_t *c = play_clip(g, t);
         double start = ts->pos;
         double end = start + (double)frames / step_samples * og_speed_mul(c->speed);
+        og__rec_cross(g, t, start, end);
+        if (g->rec_grow == t && end >= (double)OG_STEPS) g->rec_grow = -1;   /* full 4 bars: done growing */
 
         for (int i = 0; i < OG_NOTEOFFS; i++) {
             og_noteoff_t *o = &g->offs[i];

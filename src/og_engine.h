@@ -172,6 +172,34 @@ int   og_get_edit_clip(const og_t *g, int track);
 void  og_clip_copy(og_t *g, int st, int sc, int dt, int dc);
 void  og_clip_clear(og_t *g, int track, int clip);
 
+/* Recording. Live notes go through og_live_note_on/off so they can be
+ * recorded into the playing clip of the record track. */
+enum { OG_CLICK_OFF = 0, OG_CLICK_COUNTIN, OG_CLICK_ON };
+void  og_rec_arm(og_t *g, int on);           /* snapshots the take for undo */
+int   og_rec_armed(const og_t *g);
+int   og_rec_quant(const og_t *g);
+int   og_rec_mode(const og_t *g);
+void  og_rec_set_track(og_t *g, int track);
+void  og_rec_set_quant(og_t *g, int on);
+void  og_rec_set_mode(og_t *g, int replace);
+void  og_set_click(og_t *g, int mode);
+int   og_get_click(const og_t *g);
+void  og_play_countin(og_t *g);              /* 1 bar of clicks, then play */
+int   og_counting_in(const og_t *g);
+void  og_live_note_on(og_t *g, int track, int note, int vel);
+void  og_live_note_off(og_t *g, int track, int note);
+void  og_rec_param(og_t *g, int track, int pid, int value);  /* lock while recording, else base */
+void  og_rec_new_clip(og_t *g, int track, int clip);   /* launch an empty clip and record into it */
+void  og_rec_close_clip(og_t *g, int track);           /* fix its length to whole bars */
+int   og_rec_growing(const og_t *g);                   /* track with a growing clip, or -1 */
+int   og_undo(og_t *g);                                /* restore the last take; 0 = nothing */
+void  og_reset(og_t *g);                               /* new project: defaults everywhere */
+
+/* Clip serialization (for saving): hex text, at most OG_CLIP_HEX_MAX chars + NUL. */
+#define OG_CLIP_HEX_MAX  (2 * (4 + OG_STEPS * 10 + 1 + OG_LOCKS * 3))
+int   og_clip_dump(const og_t *g, int track, int clip, char *out, int out_len);
+int   og_clip_load(og_t *g, int track, int clip, const char *hex);  /* 1 = ok */
+
 /* Effects, solo, MIDI out. */
 void  og_set_fx(og_t *g, int id, int value);
 int   og_get_fx(const og_t *g, int id);

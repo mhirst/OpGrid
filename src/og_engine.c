@@ -129,6 +129,7 @@ og_t *og_create(float sample_rate) {
         g->last_pitch[t] = -1.0f;
     }
     og__seq_init(g);
+    og__rec_init(g);
     if (!og__fx_init(g)) { og_destroy(g); return NULL; }
     return g;
 }
@@ -682,6 +683,7 @@ void og_render_float(og_t *g, float *out_lr, int frames) {
         }
 
         og__fx_process(g, &bus, bl, br, n);
+        og__click_render(g, bl, br, n);
         float m = g->master * 0.5f;   /* headroom for 12 voices */
         for (int s = 0; s < n; s++) {
             out_lr[2 * (done + s)]     = soft_clip(bl[s] * m);

@@ -2,7 +2,7 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module.
 
-**Status: milestone 5 of 8** — FM Poly engine, 12-voice pool, 16-track step sequencer (step locks, conditions, micro-timing, ratchets, chords, swing), 3 LFOs per track, shared delay/reverb/chorus, master compressor, mixer, MIDI out, and 8 clips per track with a launch grid and scenes. No recording, saving or song mode yet.
+**Status: milestone 6 of 8** — FM Poly engine, 12-voice pool, 16-track step sequencer (step locks, conditions, micro-timing, ratchets, chords, swing), 3 LFOs per track, shared delay/reverb/chorus, master compressor, mixer, MIDI out, 8 clips per track with a launch grid and scenes, live recording with undo, and project save/load with autosave. No song mode yet.
 
 ## Build and install
 
@@ -26,6 +26,10 @@ Requires Schwung installed on the Move.
 | Play | Start / stop |
 | Shift + Play | Stop all clips (at the next launch point) |
 | Loop | Clip grid on / off |
+| Rec | Arm / disarm recording on the selected track |
+| Shift + Rec | Click: OFF / COUNT-IN / ON |
+| Undo | Undo the last recording take |
+| Menu | Project menu (jog to choose, jog click to select) |
 | Pads | Play the selected track (rows are a fourth apart) |
 | Shift + pad (bottom 16) | Select track 1–16 |
 | Mute + pad (bottom 16) | Mute / unmute a track |
@@ -55,6 +59,18 @@ External MIDI: channel N plays track N.
 
 Launch quantize (CLIP page, QUAN): off, 1 step, 1 beat, 1 bar (default), 2 bars, 4 bars. Steps, locks and clip settings always edit the selected clip, even while another one plays.
 
+### Recording
+
+- Arm with **Rec**, then play pads or turn knobs while the clip plays. Notes land on the nearest step (or keep their offset as micro-timing with RQNT off); held length is recorded. Notes played together become a chord. Knob moves become locks on the current step (the base sound is not changed).
+- **RMOD** on the CLIP page: DUB adds to the clip, RPLC clears each step as the playhead passes unless you play on it.
+- With click on COUNT-IN or ON, pressing **Play** while armed gives one bar of clicks first. ON also clicks while recording.
+- **New clip:** while armed, tap an empty slot in the clip grid. It launches on the next launch point and records; tap it again to set its length to whole bars (1–4). It stops growing by itself at 4 bars.
+- **Undo** restores the clip from before the take (one level).
+
+### Projects
+
+**Menu** opens: SAVE (current name), SAVE AS NEW, NEW PROJECT, and LOAD for each saved project. NEW and LOAD ask for a second click. Projects are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`, and reopens from it next time.
+
 ### Mixer mode (tap Mute)
 
 | Control | Action |
@@ -70,7 +86,7 @@ Launch quantize (CLIP page, QUAN): off, 1 step, 1 beat, 1 bar (default), 2 bars,
 - **SEND**: delay, reverb and chorus sends; MIDI channel (OFF or 1–16) and mode (INT = internal sound only, EXT = MIDI to USB-A only, BOTH).
 - **FX 1** (global): delay time (synced, 1/32 to 1 bar, dotted and triplet), feedback, ping-pong, tone (low-pass ↔ high-pass); reverb size, decay, pre-delay, damping.
 - **FX 2** (global): chorus depth, rate, width; master compressor threshold, ratio, makeup gain; master drive and volume.
-- **CLIP**: length (1–64), speed (1/8x–2x), swing (50–80%), tempo, tempo source (MOVE = follow Move's tempo, OWN = this module's), launch quantize.
+- **CLIP**: length (1–64), speed (1/8x–2x), swing (50–80%), tempo, tempo source (MOVE = follow Move's tempo, OWN = this module's), launch quantize, record quantize (RQNT), record mode (RMOD: DUB / RPLC).
 
 ### Step conditions
 
@@ -104,6 +120,7 @@ When an operator other than 1 is heard (a carrier), its LVL knob sets its volume
 - `src/og_engine.c/.h` — voices and DSP (no allocation or I/O on the audio thread)
 - `src/og_seq.c` — sequencer, runs every 16 samples inside the audio callback
 - `src/og_fx.c` — delay, reverb, chorus, master bus
+- `src/og_rec.c` — recording, count-in/click, undo, reset, clip serialization
 - `src/og_plugin.c` — Schwung plugin API v2 glue and param protocol
 - `src/ui.js` — screen, pads, knobs, LEDs
-- `test/` — C engine, sequencer, effects and clip tests (incl. a 10-minute drift test and a 20 s max-feedback stability test), Node UI tests with a fake host
+- `test/` — C engine, sequencer, effects, clip and recording tests (incl. a 10-minute drift test and a 20 s max-feedback stability test), Node UI tests with a fake host, fake DSP and in-memory filesystem

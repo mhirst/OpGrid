@@ -18,9 +18,23 @@ export function decodeDelta(v) { return v === 0 ? 0 : v < 64 ? 1 : -1; }
 export function decodeAcceleratedDelta(v) { return v === 0 ? 0 : v < 64 ? v : v - 128; }
 export function invalidateLedCache() {}
 `);
+/* in-memory filesystem shared by host_read_file/host_write_file and the os stub */
+globalThis.__files = new Map();
+fs.writeFileSync(path.join(tmp, 'os.mjs'), `
+const files = () => globalThis.__files;
+export function mkdir() { return 0; }
+export function readdir(dir) {
+    const names = [...files().keys()].filter(k => k.startsWith(dir + '/') && !k.slice(dir.length + 1).includes('/'))
+        .map(k => k.slice(dir.length + 1));
+    return [['.', '..', ...names], 0];
+}
+export function rename(a, b) { if (!files().has(a)) return -2; files().set(b, files().get(a)); files().delete(a); return 0; }
+export function remove(a) { files().delete(a); return 0; }
+`);
 const src = fs.readFileSync(path.join(root, 'src/ui.js'), 'utf8')
     .replace('/data/UserData/schwung/shared/input_filter.mjs',
-             pathToFileURL(path.join(tmp, 'input_filter.mjs')).href);
+             pathToFileURL(path.join(tmp, 'input_filter.mjs')).href)
+    .replace("from 'os'", `from '${pathToFileURL(path.join(tmp, 'os.mjs')).href}'`);
 fs.writeFileSync(path.join(tmp, 'ui.mjs'), src);
 
 /* ---- fake DSP implementing the param protocol (see src/og_plugin.c) ---- */
@@ -33,6 +47,7 @@ const dsp = {
     fx: [7, 50, 64, 64, 80, 70, 10, 60, 60, 30, 100, 127, 32, 0, 0, 100],
     clips: Array.from({ length: 16 }, () => [3, 0, 0, 0, 0, 0, 0, 0]),   /* states, track-major */
     edits: new Array(16).fill(0), lq: 3, log: [],
+    rec: [0, 0, -1, 1, 0, 1], cdumps: new Map(),
 };
 const reset = s => [0, 60, 0, 0, 0, 100, 4, 1, 0, 0];
 const ni = v => `${v}`.split(' ').map(Number);
@@ -56,6 +71,24 @@ function dspSet(k, v) {
     case 'stopall': dsp.log.push(['stopall']); break;
     case 'ccopy': dsp.clips[a[2]][a[3]] = Math.max(1, dsp.clips[a[2]][a[3]]); dsp.log.push(['ccopy', ...a]); break;
     case 'cclr': dsp.clips[a[0]][a[1]] = 0; break;
+    case 'rec': dsp.rec[0] = a[0]; dsp.log.push(['rec', a[0]]); break;
+    case 'rquant': dsp.rec[3] = a[0]; break;
+    case 'rmode': dsp.rec[4] = a[0]; break;
+    case 'click': dsp.rec[5] = a[0]; break;
+    case 'countin': dsp.log.push(['countin']); dsp.rec[1] = 1; break;
+    case 'rnew': dsp.rec[0] = 1; dsp.rec[2] = a[0]; dsp.clips[a[0]][a[1]] = 2; dsp.log.push(['rnew', a[0], a[1]]); break;
+    case 'rclose': dsp.rec[2] = -1; dsp.log.push(['rclose', a[0]]); break;
+    case 'undo': dsp.log.push(['undo']); break;
+    case 'rp': dsp.log.push(['rp', ...a]); break;
+    case 'lnon': dsp.log.push(['lnon', ...a]); break;
+    case 'tpset': { const vals = `${v}`.split(' ')[1].split(',').map(Number); dsp.params[a[0]] = vals; break; }
+    case 'cload': { const parts = `${v}`.split(' '); dsp.cdumps.set(`${parts[0]}:${parts[1]}`, parts[2]);
+        dsp.clips[+parts[0]][+parts[1]] = Math.max(1, dsp.clips[+parts[0]][+parts[1]]); break; }
+    case 'reset':
+        dsp.params = Array.from({ length: 16 }, () => new Array(64).fill(0));
+        dsp.clips = Array.from({ length: 16 }, () => [3, 0, 0, 0, 0, 0, 0, 0]);
+        dsp.cdumps = new Map(); dsp.tempo = 120; dsp.fx = dsp.fx.map(() => 0); dsp.play = 0;
+        dsp.mute.fill(0); dsp.solo.fill(0); dsp.log.push(['reset']); break;
     case 'sf': dsp.steps[a[0]][a[1]][a[2]] = a[3]; break;
     case 'sclr': dsp.steps[a[0]][a[1]] = reset();
         for (const key of [...dsp.locks[a[0]].keys()]) if (key.startsWith(`${a[1]}:`)) dsp.locks[a[0]].delete(key);
@@ -89,6 +122,8 @@ function dspGet(k) {
     if (k === 'clips') return dsp.clips.map(r => r.join('')).join('');
     if (k === 'edits') return dsp.edits.join('');
     if (k === 'lq') return `${dsp.lq}`;
+    if (k === 'rec') return dsp.rec.join(',');
+    if ((m = k.match(/^cdump:(\d+):(\d+)$/))) return dsp.cdumps.get(`${m[1]}:${m[2]}`) || '10043200' + '00'.repeat(20);
     if (k === 'mix') return dsp.mute.join('') + dsp.solo.join('');
     if (k === 'sync') return `${dsp.sync}`;
     if (k === 'play') return `${dsp.play}`;
@@ -102,6 +137,8 @@ let screenOps = 0;
 globalThis.__leds = [];
 globalThis.host_module_set_param = (k, v) => { sets.push([k, v]); dspSet(k, v); };
 globalThis.host_module_get_param = k => dspGet(k);
+globalThis.host_write_file = (p, text) => { globalThis.__files.set(p, `${text}`); return true; };
+globalThis.host_read_file = p => globalThis.__files.has(p) ? globalThis.__files.get(p) : null;
 globalThis.clear_screen = () => { screenOps++; };
 globalThis.print = (x, y, t) => {
     check(typeof t === 'string' && !t.includes('undefined') && !t.includes('NaN'), `bad print text: ${t}`);
@@ -166,9 +203,9 @@ check(globalThis.__leds.length > 0 && globalThis.__leds.length <= 20 * 12, 'LEDs
 /* ---- keys mode ---- */
 sets.length = 0;
 midi(0x90, 68, 100);
-check(sets[0]?.[0] === 'non' && sets[0][1] === '0 48 100', `pad note on: ${JSON.stringify(sets[0])}`);
+check(sets[0]?.[0] === 'lnon' && sets[0][1] === '0 48 100', `pad note on: ${JSON.stringify(sets[0])}`);
 midi(0x80, 68, 0);
-check(sets[1]?.[0] === 'noff' && sets[1][1] === '0 48', `pad note off: ${JSON.stringify(sets[1])}`);
+check(sets[1]?.[0] === 'lnoff' && sets[1][1] === '0 48', `pad note off: ${JSON.stringify(sets[1])}`);
 
 /* ---- sound edit ---- */
 for (let i = 0; i < 20; i++) midi(0xB0, 71, 1);
@@ -345,7 +382,97 @@ jogTo(9);
 midi(0xB0, 76, 1);                                          /* CLIP page knob 6 = launch quantize */
 check(dsp.lq === 4, `launch quantize 2 bars: ${dsp.lq}`);
 
+/* ---- milestone 6: recording ---- */
+const logHas = (...e) => dsp.log.some(x => JSON.stringify(x) === JSON.stringify(e));
+dsp.play = 0;
+midi(0xB0, 86, 127); midi(0xB0, 86, 0);
+check(ui.state().recArmed && dsp.rec[0] === 1, 'Rec arms recording');
+check(lastSet('rtrack')?.[1] === `${ui.state().track}`, 'record track follows the selected track');
+midi(0xB0, 49, 127); midi(0xB0, 86, 127); midi(0xB0, 49, 0);
+check(ui.state().clickMode === 2 && dsp.rec[5] === 2, `Shift+Rec cycles click: ${ui.state().clickMode}`);
+midi(0xB0, 85, 127);
+check(logHas('countin') && ui.state().playing, 'Play while armed with click = count-in');
+dsp.rec[1] = 0; dsp.play = 1;
+ticks(32);
+check(!ui.state().countingIn, 'count-in finished');
+jogTo(2);
+sets.length = 0;
+midi(0x90, 70, 100); midi(0x80, 70, 0);
+check(sets.some(x => x[0] === 'lnon'), 'pads send live notes (recordable)');
+midi(0xB0, 71, 3);
+check(lastSet('rp')?.[1].split(' ')[1] === '16', `knob while recording sends a recorded lock: ${JSON.stringify(lastSet('rp'))}`);
+midi(0x90, 20, 100); sets.length = 0; midi(0x90, 72, 100); midi(0x80, 72, 0); midi(0x80, 20, 0);
+check(sets.some(x => x[0] === 'non') && !sets.some(x => x[0] === 'lnon'), 'held-step audition is never recorded');
+midi(0xB0, 56, 127);
+check(logHas('undo'), 'Undo');
+/* new clip in the grid while armed */
+midi(0xB0, 58, 127); midi(0xB0, 58, 0);
+const t7 = 7;
+midi(0x90, padFor(t7, 6 % 4 + (ui.state().sceneBank ? 0 : 0)), 100);
+const sc = (ui.state().sceneBank * 4) + (6 % 4);
+check(logHas('rnew', t7, sc), `empty slot while armed records a new clip: ${JSON.stringify(dsp.log.slice(-3))}`);
+ticks(16);
+check(ui.state().growTrack === t7, 'UI knows the clip is growing');
+midi(0x90, padFor(t7, 6 % 4), 100);
+check(logHas('rclose', t7), 'second tap fixes the length');
+midi(0xB0, 58, 127); midi(0xB0, 58, 0);
+midi(0xB0, 86, 127);
+check(!ui.state().recArmed && dsp.rec[0] === 0, 'Rec disarms');
+midi(0xB0, 85, 127);                                        /* stop */
+check(dsp.play === 0, 'stopped');
+
+/* ---- milestone 6: projects ---- */
+dsp.params[3][16] = 77; dsp.fx[4] = 55; dsp.tempo = 101; dsp.clips[3][2] = 1;
+dsp.cdumps.set('3:2', 'deadbeef00');
+midi(0xB0, 50, 127);
+check(ui.state().menuOpen && ui.state().menuItems[0].startsWith('SAVE'), `menu opens: ${ui.state().menuItems}`);
+midi(0xB0, 3, 127);                                          /* SAVE */
+check(!ui.state().menuOpen && ui.state().job, 'save runs as a job');
+ticks(200);
+check(!ui.state().job, 'save finished');
+const saved = [...globalThis.__files.keys()].find(k => k.includes('/projects/') && k.endsWith('.json'));
+check(!!saved, `project file written: ${[...globalThis.__files.keys()]}`);
+const pdata = saved ? JSON.parse(globalThis.__files.get(saved)) : null;
+check(pdata && pdata.tracks.length === 16 && pdata.tracks[3].params[16] === 77 && pdata.fx[4] === 55 && pdata.tempo === 101,
+      'saved params, fx and tempo');
+check(pdata && pdata.tracks[3].clips['2'] === 'deadbeef00', 'saved clip data');
+check(pdata && Object.keys(pdata.tracks[5].clips).length === 0, 'empty clips are not saved');
+check(!ui.state().projectDirty, 'save clears the dirty flag');
+
+/* change things, then load the project back */
+midi(0xB0, 50, 127);
+midi(0xB0, 14, 1); midi(0xB0, 14, 1);                       /* NEW PROJECT */
+check(ui.state().menuItems[2] === 'NEW PROJECT', 'menu has NEW PROJECT');
+midi(0xB0, 3, 127);
+check(ui.state().menuOpen, 'destructive items need a second click');
+midi(0xB0, 3, 127);
+check(logHas('reset') && dsp.params[3][16] === 0, 'new project resets');
+midi(0xB0, 50, 127);
+midi(0xB0, 14, 1); midi(0xB0, 14, 1); midi(0xB0, 14, 1);    /* first LOAD entry */
+check(ui.state().menuItems[3]?.startsWith('LOAD '), `load entry listed: ${ui.state().menuItems[3]}`);
+midi(0xB0, 3, 127); midi(0xB0, 3, 127);
+ticks(200);
+check(dsp.params[3][16] === 77 && dsp.fx[4] === 55 && dsp.tempo === 101, `load restores params/fx/tempo: ${dsp.params[3][16]} ${dsp.fx[4]} ${dsp.tempo}`);
+check(dsp.cdumps.get('3:2') === 'deadbeef00', 'load restores clips');
+
+/* autosave after ~2 minutes when something changed, and on unload */
+jogTo(0);
+midi(0xB0, 72, 1);
+check(ui.state().projectDirty, 'edits mark the project dirty');
+ui.tick(344 * 120 + 400);
+check(globalThis.__files.has('/data/UserData/schwung/opgrid/autosave.json'), 'autosave written');
+globalThis.__files.delete('/data/UserData/schwung/opgrid/autosave.json');
+midi(0xB0, 72, 1);
+globalThis.onUnload();
+check(globalThis.__files.has('/data/UserData/schwung/opgrid/autosave.json'), 'autosave on unload');
+/* a fresh init restores the autosave */
+dsp.log.length = 0;
+globalThis.init();
+ticks(200);
+check(logHas('reset'), 'init loads the autosave');
+
 /* shift + pad selects track and pulls its data */
+dsp.params[4] = new Array(64).fill(10);
 midi(0xB0, 49, 127); midi(0x90, 72, 100); midi(0xB0, 49, 0);
 check(ui.state().track === 4, `track select: ${ui.state().track}`);
 check(ui.values[4][5] === 10 && ui.values[4][0] === 7, `pulled (and clamped) track 4 params: ${ui.values[4][5]} ${ui.values[4][0]}`);
@@ -354,7 +481,7 @@ midi(0x90, 70, 90);
 check(sets[0]?.[1].startsWith('4 '), `pad plays selected track: ${JSON.stringify(sets[0])}`);
 midi(0xB0, 55, 127);
 midi(0x80, 70, 0);
-check(lastSet('noff')?.[1] === '4 50', `held note released after octave change: ${JSON.stringify(lastSet('noff'))}`);
+check(lastSet('lnoff')?.[1] === '4 50', `held note released after octave change: ${JSON.stringify(lastSet('lnoff'))}`);
 
 sets.length = 0;
 midi(0x90, 3, 127);
@@ -368,7 +495,7 @@ for (let p = 0; p < ui.PAGES.length; p++) {
 ticks(2000);
 globalThis.onResume();
 globalThis.onUnload();
-check(sets.at(-1)[0] === 'panic', 'panic on unload');
+check(sets.some(x => x[0] === 'panic'), 'panic on unload');
 
 fs.rmSync(tmp, { recursive: true, force: true });
 if (failures) { console.log(`${failures} UI test(s) FAILED`); process.exit(1); }

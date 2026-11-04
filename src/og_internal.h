@@ -133,6 +133,17 @@ struct og {
     int      fill;
     double   gpos;              /* global position in steps (1x speed) */
     int      launch_q;          /* launch quantize index */
+
+    /* recording */
+    int      rec, rec_track, rec_quant, rec_mode, click;
+    double   countin;           /* steps of count-in left (0 = none) */
+    int      rec_grow;          /* track whose new clip is still growing, -1 none */
+    long     rec_mark[OG_STEPS];/* absolute step index each step was last recorded at */
+    struct { int on, track, step; double start; } rec_hold[128];
+    og_clip_t undo_clip;
+    int      undo_t, undo_c, undo_ok;
+    uint32_t click_ph, click_inc;
+    float    click_amp;
     int      solo[OG_TRACKS];
     float    lfo_free[OG_TRACKS][OG_LFOS];  /* free-running LFO phases */
     float    lfo_free_rnd[OG_TRACKS][OG_LFOS];
@@ -158,6 +169,12 @@ void og__note_on_locked(og_t *g, int track, int note, int vel,
                         const og_lock_t *locks, int step, int slide);
 void og__apply_locks_to_track(og_t *g, int track, const og_lock_t *locks, int step);
 void og__seq_init(og_t *g);
+void og__rec_init(og_t *g);
+int  og__countin_advance(og_t *g, int frames, double step_samples); /* 1 = still counting */
+void og__rec_cross(og_t *g, int track, double start, double end);   /* replace-mode clearing */
+void og__click_beats(og_t *g, double gs, double ge);
+void og__click_render(og_t *g, float *l, float *r, int n);
+void og__clip_reset(og_clip_t *c);
 int  og__fx_init(og_t *g);
 void og__fx_free(og_t *g);
 void og__fx_process(og_t *g, const og_bus_t *b, float *out_l, float *out_r, int n);

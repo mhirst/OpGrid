@@ -20,12 +20,14 @@
  */
 import { setLED, setButtonLED, decodeDelta, decodeAcceleratedDelta, invalidateLedCache }
     from '/data/UserData/schwung/shared/input_filter.mjs';
+import * as os from 'os';
 
 /* ---------- hardware ids ---------- */
 const PAD0 = 68, PADS = 32, STEP0 = 16, STEPS = 16;
 const KNOB0 = 71, JOG = 14;
 const CC_SHIFT = 49, CC_DOWN = 54, CC_UP = 55, CC_LEFT = 62, CC_RIGHT = 63;
 const CC_PLAY = 85, CC_MUTE = 88, CC_DELETE = 119, CC_COPY = 60, CC_LOOP = 58;
+const CC_REC = 86, CC_UNDO = 56, CC_MENU = 50, JOG_CLICK = 3;
 const WHITE = 120, GREY = 124, DARK = 119, OFF = 0, LED_BRIGHT = 127, LED_DIM = 16;
 
 /* ---------- tracks ---------- */
@@ -157,7 +159,10 @@ const CLIP_KNOBS = [
     ['BPM', 300, 30, num],
     ['SYNC', 1, 0, v => v ? 'MOVE' : 'OWN'],
     ['QUAN', 5, 0, v => LAUNCH_QS[v]],
+    ['RQNT', 1, 0, v => v ? 'ON' : 'OFF'],
+    ['RMOD', 1, 0, v => v ? 'RPLC' : 'DUB'],
 ];
+const CLICKS = ['OFF', 'COUNT-IN', 'ON'];
 const LAUNCH_QS = ['OFF', 'STEP', 'BEAT', '1BAR', '2BAR', '4BAR'];
 /* clip slot states (must match OG_CLIP_*) */
 const CS_EMPTY = 0, CS_STOPPED = 1, CS_QUEUED = 2, CS_PLAYING = 3, CS_STOPPING = 4;
@@ -170,6 +175,12 @@ let mixer = false, mixBank = 0;
 let clipMode = false, trackBank = 0, sceneBank = 0, copyHeld = false, copySrc = null, launchQ = 3;
 const clipStates = new Array(TRACKS * CLIPS).fill(0);
 const editClips = new Array(TRACKS).fill(0);
+/* recording */
+let recArmed = false, countingIn = false, growTrack = -1, recQuant = 1, recMode = 0, clickMode = 1;
+let flash = '', flashUntil = 0;                 /* one-line status message */
+const lockPreview = {};
+const recLocked = new Set();                     /* params moved while recording (base unchanged) */
+function showFlash(text, ticks = 700) { flash = text; flashUntil = tickCount + ticks; dirty = true; }
 const solo = new Array(16).fill(0);
 let playing = false, tempo = 120, sync = 1;
 let touchedKnob = -1, touchedUntil = 0, tickCount = 0;
@@ -188,7 +199,10 @@ const ledCache = new Map();
 const LEDS_PER_TICK = 12;
 
 /* ---------- host helpers ---------- */
+const NON_EDIT_KEYS = new Set(['non', 'noff', 'lnoff', 'play', 'fill', 'countin', 'panic', 'edit', 'rec', 'rtrack']);
+let projectDirty = false;
 function setParam(key, val) {
+    if (!NON_EDIT_KEYS.has(key)) projectDirty = true;
     if (typeof host_module_set_param === 'function') host_module_set_param(key, `${val}`);
 }
 function getParam(key) {
@@ -287,6 +301,7 @@ function selectTrack(t) {
     if (t < 0 || t >= TRACKS || t === track) return;
     releaseHeldSteps();
     track = t;
+    setParam('rtrack', t);
     pullTrack(t);
     dirty = true;
 }
@@ -322,6 +337,14 @@ function editSound(knob, delta) {
     }
     const next = clamp(values[track][pid] + delta, 0, max);
     if (next === values[track][pid]) return;
+    if (recArmed && playing) {
+        /* recording: the move becomes a lock on the current step */
+        lockPreview[pid] = next;
+        values[track][pid] = next;
+        setParam('rp', `${track} ${pid} ${next}`);
+        recLocked.add(pid);
+        return;
+    }
     values[track][pid] = next;
     setParam('p', `${track} ${pid} ${next}`);
 }
@@ -375,7 +398,7 @@ function editStep(knob, delta) {
 
 function clipKnobValue(knob) {
     const c = clipInfo[track];
-    return [c.len, c.speed, c.swing, tempo, sync, launchQ][knob];
+    return [c.len, c.speed, c.swing, tempo, sync, launchQ, recQuant, recMode][knob];
 }
 
 /* ---------- clips ---------- */
@@ -426,8 +449,19 @@ function onClipPad(i, on) {
         setParam('scene', `${c}`);
     } else {
         const st = clipState(t, c);
-        editClipSelect(t, c);
-        if (st !== CS_EMPTY) setParam('launch', `${t} ${c}`);
+        if (recArmed && growTrack === t && editClips[t] === c) {
+            setParam('rclose', `${t}`);                  /* second tap: fix the new clip's length */
+            showFlash('CLIP LENGTH SET');
+        } else if (recArmed && st === CS_EMPTY) {
+            editClipSelect(t, c);
+            setParam('rnew', `${t} ${c}`);              /* record a new clip from the next launch point */
+            if (!playing) { startTransport(); }
+            showFlash('RECORDING NEW CLIP');
+        } else {
+            editClipSelect(t, c);
+            if (st !== CS_EMPTY) setParam('launch', `${t} ${c}`);
+        }
+        pullRec();
     }
     pullClips();
     dirty = true;
@@ -445,7 +479,9 @@ function editClip(knob, delta) {
     case 2: c.swing = next; setParam('cswg', `${track} ${next}`); break;
     case 3: tempo = next; sync = 0; setParam('tempo', next); break;
     case 4: sync = next; setParam('sync', next); break;
-    default: launchQ = next; setParam('lq', next); break;
+    case 5: launchQ = next; setParam('lq', next); break;
+    case 6: recQuant = next; setParam('rquant', next); break;
+    default: recMode = next; setParam('rmode', next); break;
     }
 }
 
@@ -529,11 +565,13 @@ function onPad(i, vel, on) {
             }
             dirty = true;
         }
-        if (padNote[i] >= 0) setParam('noff', `${track} ${padNote[i]}`);
+        const live = held.size === 0;              /* auditioning a held step is never recorded */
+        if (padNote[i] >= 0) setParam(live ? 'lnoff' : 'noff', `${track} ${padNote[i]}`);
         padNote[i] = n;
-        setParam('non', `${track} ${n} ${Math.max(1, vel)}`);
+        setParam(live ? 'lnon' : 'non', `${track} ${n} ${Math.max(1, vel)}`);
+        if (live && recArmed && playing) stepsDirty = true;
     } else if (padNote[i] >= 0) {
-        setParam('noff', `${track} ${padNote[i]}`);
+        setParam('lnoff', `${track} ${padNote[i]}`);
         padNote[i] = -1;
     }
 }
@@ -559,6 +597,7 @@ globalThis.onMidiMessageInternal = function (data) {
         else if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && PARAMS[pid][2] < 40; }
         else if (page === PAGE_STEP) small = knob !== 1 && knob !== 2;
         else if (page === PAGE_CLIP) small = knob === 1 || knob >= 4;
+        if (menuOpen) return;
         else small = FX[(page === PAGE_FX2 ? 8 : 0) + knob][1] < 40;
         const raw = small ? decodeDelta(d2) : decodeAcceleratedDelta(d2, knob);
         const delta = shift && !small ? Math.sign(raw) : raw;
@@ -583,14 +622,42 @@ globalThis.onMidiMessageInternal = function (data) {
         updateFill(); dirty = true; break;
     case CC_DELETE: deleteHeld = press; break;
     case CC_COPY: copyHeld = press; if (!press) copySrc = null; dirty = true; break;
+    case CC_MENU: if (press) toggleMenu(); break;
+    case JOG_CLICK: if (press && menuOpen) menuSelect(); break;
+    case CC_UNDO:
+        if (press) {
+            setParam('undo', 1);
+            pullTrack(track); pullClips();
+            showFlash('UNDO');
+        }
+        break;
+    case CC_REC:
+        if (!press) break;
+        if (shift) {
+            clickMode = (clickMode + 1) % 3;
+            setParam('click', clickMode);
+            showFlash(`CLICK ${CLICKS[clickMode]}`);
+        } else {
+            recArmed = !recArmed;
+            setParam('rtrack', track);
+            setParam('rec', recArmed ? 1 : 0);
+            if (!recArmed) { recLocked.clear(); pullTrack(track); }
+            pullRec();
+        }
+        dirty = true;
+        break;
     case CC_LOOP:
         if (press && !shift) { clipMode = !clipMode; if (clipMode) { mixer = false; pullClips(); } dirty = true; }
         break;
     case CC_PLAY:
         if (press && shift) { setParam('stopall', 1); pullClips(); dirty = true; break; }
-        if (press) { playing = !playing; setParam('play', playing ? 1 : 0); dirty = true; }
+        if (press) {
+            if (playing || countingIn) { playing = false; countingIn = false; setParam('play', 0); }
+            else startTransport();
+            dirty = true;
+        }
         break;
-    case JOG: { const dl = decodeDelta(d2); if (dl) changePage(dl); break; }
+    case JOG: { const dl = decodeDelta(d2); if (dl) { if (menuOpen) menuMove(dl); else changePage(dl); } break; }
     case CC_LEFT: if (press) {
         if (clipMode) { trackBank = 0; dirty = true; }
         else if (mixer) { mixBank = 0; dirty = true; } else changePage(-1);
@@ -684,6 +751,9 @@ function desiredLeds() {
     out.push(['c', CC_MUTE, muteHeld || mixer ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_LOOP, clipMode ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_COPY, copyHeld ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_REC, recArmed ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_MENU, menuOpen ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_UNDO, LED_DIM]);
     out.push(['c', CC_DELETE, deleteHeld ? LED_BRIGHT : LED_DIM]);
     return out;
 }
@@ -723,16 +793,27 @@ function drawHeader() {
     if (!mixer && (page === PAGE_FX1 || page === PAGE_FX2)) left = FX_TITLES[page - PAGE_FX1];
     if (mixer) left = `TRACKS ${mixBank * 8 + 1}-${mixBank * 8 + 8}`;
     print(2, 1, left, 0);
-    const right = `${playing ? '>' : '.'} ${mixer ? 'MIX' : (page === PAGE_FX1 || page === PAGE_FX2) ? '' : PAGES[page]}`;
+    const tag = countingIn ? 'CNT' : recArmed ? 'REC' : playing ? '>' : '.';
+    const right = `${tag} ${mixer ? 'MIX' : (page === PAGE_FX1 || page === PAGE_FX2) ? '' : PAGES[page]}`;
     print(126 - text_width(right), 1, right, 0);
 }
 
 function drawScreen() {
     clear_screen();
+    if (menuOpen || job) { drawMenu(); return; }
     drawHeader();
     const hs = firstHeld();
     const hot = k => k === touchedKnob && tickCount < touchedUntil;
+    if (flash && tickCount < flashUntil) {
+        drawBody(hs, hot);
+        fill_rect(0, 54, 128, 10, 1);
+        print(2, 55, flash, 0);
+        return;
+    }
+    drawBody(hs, hot);
+}
 
+function drawBody(hs, hot) {
     if (mixer) { drawMixer(hot); return; }
     if (clipMode && !(touchedKnob >= 0 && tickCount < touchedUntil)) { drawClips(); return; }
     if (page < SOUND_PAGES) {
@@ -820,6 +901,215 @@ function drawMixer(hot) {
     }
 }
 
+/* ---------- transport / recording ---------- */
+function startTransport() {
+    if (recArmed && clickMode !== 0) { setParam('countin', 1); countingIn = true; }
+    else setParam('play', 1);
+    playing = true;
+}
+
+function pullRec() {
+    const r = ints(getParam('rec'));
+    if (r.length < 6 || !r.every(Number.isFinite)) return;
+    const was = countingIn;
+    recArmed = r[0] === 1; countingIn = r[1] === 1; growTrack = r[2];
+    recQuant = r[3]; recMode = r[4]; clickMode = r[5];
+    if (was !== countingIn) dirty = true;
+}
+
+/* ---------- projects (save / load / autosave) ---------- */
+const ROOT_DIR = '/data/UserData/schwung/opgrid';
+const PROJECT_DIR = `${ROOT_DIR}/projects`;
+const AUTOSAVE = `${ROOT_DIR}/autosave.json`;
+const AUTOSAVE_TICKS = 344 * 120;               /* ~2 minutes of ticks */
+let projectName = 'PROJECT 01';
+let menuOpen = false, menuIndex = 0, menuItems = [], confirmIndex = -1;
+let job = null;                                 /* incremental save/load in progress */
+let lastAutosave = 0;
+
+function ensureDirs() {
+    for (const d of [ROOT_DIR, PROJECT_DIR]) { try { os.mkdir(d); } catch (e) { /* exists */ } }
+}
+
+function listProjects() {
+    let r;
+    try { r = os.readdir(PROJECT_DIR); } catch (e) { return []; }
+    const names = Array.isArray(r) && Array.isArray(r[0]) ? r[0] : [];
+    return names.filter(n => typeof n === 'string' && /\.json$/i.test(n))
+        .map(n => n.replace(/\.json$/i, '')).sort();
+}
+
+function writeAtomic(path, text) {
+    if (typeof host_write_file !== 'function') return false;
+    const tmp = `${path}.tmp`;
+    if (!host_write_file(tmp, text)) return false;
+    let rc = -1;
+    try { rc = os.rename(tmp, path); } catch (e) { rc = -1; }
+    if (rc === 0) return true;
+    const ok = host_write_file(path, text);
+    try { os.remove(tmp); } catch (e) { /* ignore */ }
+    return !!ok;
+}
+
+/* Build save tasks: each reads a little from the DSP, so a save spreads over ticks. */
+function startSave(path, name, sync = false) {
+    const data = { format: 1, app: 'opgrid', name, tracks: [] };
+    const tasks = [];
+    tasks.push(() => {
+        pullClips(); pullMix(); pullRec(); pullFx(); pullTransport();
+        Object.assign(data, { tempo, sync: sync_(), lq: launchQ, recQuant, recMode, click: clickMode, fx: [...fxValues] });
+    });
+    for (let t = 0; t < TRACKS; t++) {
+        tasks.push(() => {
+            const params = ints(getParam(`tp:${t}`));
+            let play = -1;
+            for (let c = 0; c < CLIPS; c++) {
+                const st = clipState(t, c);
+                if (st === CS_PLAYING || st === CS_STOPPING) play = c;
+            }
+            data.tracks[t] = { params, mute: clipInfo[t].mute, solo: solo[t], edit: editClips[t], play, clips: {} };
+        });
+        for (let c = 0; c < CLIPS; c++) tasks.push(() => {
+            if (clipState(t, c) === CS_EMPTY) return;
+            const hex = getParam(`cdump:${t}:${c}`);
+            /* byte 3 of the dump is the clip's "used" flag: skip never-edited slots */
+            if (hex && hex.length > 8 && hex.slice(6, 8) !== '00') data.tracks[t].clips[c] = hex;
+        });
+    }
+    tasks.push(() => {
+        ensureDirs();
+        const ok = writeAtomic(path, JSON.stringify(data));
+        if (path !== AUTOSAVE) showFlash(ok ? `SAVED ${name}` : 'SAVE FAILED');
+        if (ok) projectDirty = false;
+    });
+    runJob({ kind: 'save', tasks, total: tasks.length }, sync);
+}
+const sync_ = () => sync;
+
+function startLoad(path, quiet = false) {
+    let data;
+    try { data = JSON.parse(typeof host_read_file === 'function' ? (host_read_file(path) || 'null') : 'null'); }
+    catch (e) { data = null; }
+    if (!data || data.app !== 'opgrid' || !Array.isArray(data.tracks)) {
+        if (!quiet) showFlash('LOAD FAILED');
+        return false;
+    }
+    const tasks = [];
+    tasks.push(() => {
+        setParam('reset', 1);
+        if (Number.isFinite(data.tempo)) setParam('tempo', data.tempo);
+        setParam('sync', data.sync ? 1 : 0);
+        if (Number.isFinite(data.lq)) setParam('lq', data.lq);
+        if (Number.isFinite(data.recQuant)) setParam('rquant', data.recQuant);
+        if (Number.isFinite(data.recMode)) setParam('rmode', data.recMode);
+        if (Number.isFinite(data.click)) setParam('click', data.click);
+        (data.fx || []).forEach((v, i) => { if (Number.isFinite(v)) setParam('fx', `${i} ${v}`); });
+    });
+    data.tracks.forEach((tr, t) => {
+        if (!tr || t >= TRACKS) return;
+        tasks.push(() => {
+            if (Array.isArray(tr.params)) setParam('tpset', `${t} ${tr.params.filter(Number.isFinite).join(',')}`);
+            if (tr.mute) setParam('mute', `${t} 1`);
+            if (tr.solo) setParam('solo', `${t} 1`);
+        });
+        for (const [c, hex] of Object.entries(tr.clips || {})) {
+            tasks.push(() => { if (/^[0-9a-f]+$/i.test(hex)) setParam('cload', `${t} ${c} ${hex}`); });
+        }
+        tasks.push(() => {
+            setParam('edit', `${t} ${clamp(tr.edit | 0, 0, CLIPS - 1)}`);
+            if (Number.isFinite(tr.play)) {
+                if (tr.play >= 0) setParam('launch', `${t} ${tr.play}`); else setParam('stop', `${t}`);
+            }
+        });
+    });
+    tasks.push(() => {
+        projectName = String(data.name || projectName).slice(0, 16);
+        playing = false; recArmed = false;
+        for (let t = 0; t < TRACKS; t++) pullTrack(t);
+        pullTransport(); pullFx(); pullMix(); pullClips(); pullRec();
+        projectDirty = false;
+        if (!quiet) showFlash(`LOADED ${projectName}`);
+    });
+    runJob({ kind: 'load', tasks, total: tasks.length }, false);
+    return true;
+}
+
+function runJob(j, sync) {
+    if (sync) { for (const fn of j.tasks) fn(); return; }
+    job = j;
+    dirty = true;
+}
+
+function jobTick() {
+    if (!job) return;
+    for (let i = 0; i < 4 && job.tasks.length; i++) job.tasks.shift()();
+    if (!job.tasks.length) job = null;
+    dirty = true;
+}
+
+function nextProjectName() {
+    const used = new Set(listProjects());
+    for (let i = 1; i < 100; i++) {
+        const n = `PROJECT ${String(i).padStart(2, '0')}`;
+        if (!used.has(n)) return n;
+    }
+    return `PROJECT ${tickCount}`;
+}
+
+function buildMenu() {
+    menuItems = [
+        { label: `SAVE ${projectName}`, act: () => startSave(`${PROJECT_DIR}/${projectName}.json`, projectName) },
+        { label: 'SAVE AS NEW', act: () => { projectName = nextProjectName(); startSave(`${PROJECT_DIR}/${projectName}.json`, projectName); } },
+        { label: 'NEW PROJECT', confirm: true, act: () => { setParam('reset', 1); projectName = nextProjectName(); afterReset(); showFlash('NEW PROJECT'); } },
+        ...listProjects().map(n => ({ label: `LOAD ${n}`, confirm: true, act: () => startLoad(`${PROJECT_DIR}/${n}.json`) })),
+    ];
+    menuIndex = clamp(menuIndex, 0, menuItems.length - 1);
+}
+
+function afterReset() {
+    playing = false; recArmed = false;
+    for (let t = 0; t < TRACKS; t++) pullTrack(t);
+    pullTransport(); pullFx(); pullMix(); pullClips(); pullRec();
+    projectDirty = false;
+}
+
+function toggleMenu() {
+    menuOpen = !menuOpen;
+    confirmIndex = -1;
+    if (menuOpen) { ensureDirs(); buildMenu(); }
+    dirty = true;
+}
+function menuMove(d) { menuIndex = clamp(menuIndex + d, 0, menuItems.length - 1); confirmIndex = -1; dirty = true; }
+function menuSelect() {
+    const item = menuItems[menuIndex];
+    if (!item) return;
+    if (item.confirm && confirmIndex !== menuIndex) { confirmIndex = menuIndex; dirty = true; return; }
+    menuOpen = false;
+    confirmIndex = -1;
+    item.act();
+    dirty = true;
+}
+
+function drawMenu() {
+    fill_rect(0, 0, 128, 10, 1);
+    print(2, 1, job ? (job.kind === 'save' ? 'SAVING' : 'LOADING') : 'PROJECT', 0);
+    if (job) {
+        const pct = Math.round(100 * (1 - job.tasks.length / job.total));
+        draw_rect(4, 30, 120, 8, 1);
+        fill_rect(4, 30, Math.round(120 * pct / 100), 8, 1);
+        print(4, 44, `${pct}%`, 1);
+        return;
+    }
+    const first = clamp(menuIndex - 2, 0, Math.max(0, menuItems.length - 5));
+    for (let r = 0; r < 5 && first + r < menuItems.length; r++) {
+        const i = first + r, y = 12 + r * 10;
+        let label = menuItems[i].label.slice(0, 20);
+        if (i === confirmIndex) label = 'CLICK AGAIN TO OK';
+        if (i === menuIndex) { fill_rect(0, y - 1, 128, 10, 1); print(2, y, label, 0); }
+        else print(2, y, label, 1);
+    }
+}
+
 /* ---------- lifecycle ---------- */
 globalThis.init = function () {
     for (let t = 0; t < TRACKS; t++) pullTrack(t);
@@ -827,6 +1117,9 @@ globalThis.init = function () {
     pullFx();
     pullMix();
     pullClips();
+    pullRec();
+    /* a fresh start restores the last session */
+    startLoad(AUTOSAVE, true);
     playing = getParam('play') === '1';
     ledCache.clear();
     dirty = true;
@@ -842,6 +1135,8 @@ globalThis.onResume = function () {
 };
 
 globalThis.onUnload = function () {
+    job = null;
+    if (projectDirty) startSave(AUTOSAVE, projectName, true);
     setParam('panic', 1);
 };
 
@@ -855,9 +1150,20 @@ globalThis.tick = function () {
     }
     if (stepsDirty && tickCount % 4 === 0) { pullSteps(track); pullClip(track); }
     if (clipMode && tickCount % 16 === 0) pullClips();
+    if ((recArmed || countingIn) && tickCount % 16 === 0) {
+        pullRec();
+        if (countingIn === false && playing === true) dirty = true;
+        if (recArmed && playing && tickCount % 64 === 0) stepsDirty = true;
+    }
+    jobTick();
+    if (!job && projectDirty && tickCount - lastAutosave >= AUTOSAVE_TICKS) {
+        lastAutosave = tickCount;
+        startSave(AUTOSAVE, projectName);
+    }
     if (clipMode && tickCount % 64 === 0) dirty = true;      /* blink */
     if (sync && tickCount % 256 === 0) { const old = tempo; pullTransport(); if (old !== tempo) dirty = true; }
     flushLeds();
+    if (flash && tickCount === flashUntil) dirty = true;
     if (dirty && tickCount % 4 === 0) {
         drawScreen();
         dirty = false;
@@ -870,5 +1176,7 @@ globalThis.__opgrid = {
     values, stepFlags, clipInfo, held,
     clipStates, editClips, LAUNCH_QS,
     state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync, mixer, mixBank,
-        clipMode, trackBank, sceneBank, launchQ }),
+        clipMode, trackBank, sceneBank, launchQ, recArmed, countingIn, growTrack, recQuant, recMode,
+        clickMode, menuOpen, job: !!job, projectName, projectDirty, menuItems: menuItems.map(m => m.label) }),
+    tick: n => { for (let i = 0; i < n; i++) globalThis.tick(); },
 };
