@@ -133,7 +133,7 @@ static void test_new_clip(void) {
     CHECK(og_rec_growing(g) == -1, "no longer growing");
     CHECK(og_step_get(g, 1, 3, OG_F_NOTE0) == 60 && og_step_get(g, 1, 21, OG_F_NOTE0) == 62,
           "both notes in the new clip (%d %d)", og_step_get(g, 1, 3, OG_F_NOTE0), og_step_get(g, 1, 21, OG_F_NOTE0));
-    CHECK(og_undo(g) && og_clip_state(g, 1, 3) == OG_CLIP_PLAYING, "undo empties the new clip (state stays playing)");
+    CHECK(og_undo(g) && og_clip_state(g, 1, 3) == OG_CLIP_EMPTY, "undo empties the new clip");
     og_destroy(g);
 }
 

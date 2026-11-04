@@ -40,7 +40,7 @@ static int collect(og_t *g, int track, int note, double *t, int max) {
 
 static void test_states_and_edit(void) {
     og_t *g = fresh();
-    CHECK(og_clip_state(g, 0, 0) == OG_CLIP_PLAYING, "clip 1 is the playing clip by default");
+    CHECK(og_playing_clip(g, 0) == 0 && og_clip_state(g, 0, 0) == OG_CLIP_EMPTY, "clip 1 plays by default but shows empty until edited");
     CHECK(og_clip_state(g, 0, 3) == OG_CLIP_EMPTY, "empty slot");
     put(g, 0, 3, 0, 70);
     CHECK(og_clip_state(g, 0, 3) == OG_CLIP_STOPPED, "edited slot has content");
@@ -178,7 +178,7 @@ static void test_plugin(void) {
     api->get_param(in, "edits", buf, sizeof(buf));
     CHECK(strlen(buf) == 16 && buf[2] == '5', "edits: %s", buf);
     api->get_param(in, "clips", buf, sizeof(buf));
-    CHECK(strlen(buf) == 128 && buf[2 * 8 + 5] == '0' + OG_CLIP_STOPPED && buf[0] == '0' + OG_CLIP_PLAYING, "clips: %.24s", buf);
+    CHECK(strlen(buf) == 128 && buf[2 * 8 + 5] == '0' + OG_CLIP_STOPPED && buf[0] == '0' + OG_CLIP_EMPTY, "clips: %.24s", buf);
     api->set_param(in, "launch", "2 5");
     api->get_param(in, "clips", buf, sizeof(buf));
     CHECK(buf[2 * 8 + 5] == '0' + OG_CLIP_PLAYING, "launch while stopped");

@@ -278,6 +278,8 @@ void og_stop_all(og_t *g) {
 int og_clip_state(const og_t *g, int track, int clip) {
     if (!g || !track_ok(track) || !clip_ok(clip)) return OG_CLIP_EMPTY;
     const og_trackseq_t *ts = &g->ts[track];
+    /* a slot with nothing in it shows as empty even while it is the "playing" one */
+    if (!g->clips[track][clip].used && ts->queued != clip) return OG_CLIP_EMPTY;
     if (ts->clip == clip) return ts->queued == OG_Q_STOP || (ts->queued >= 0 && ts->queued != clip)
                                  ? OG_CLIP_STOPPING : OG_CLIP_PLAYING;
     if (ts->queued == clip) return OG_CLIP_QUEUED;

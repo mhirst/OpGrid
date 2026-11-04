@@ -2,7 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Wpedantic -Iinclude -Isrc
 SRC = src/og_engine.c src/og_seq.c src/og_fx.c src/og_rec.c src/og_song.c src/og_plugin.c
 
-.PHONY: test test-c test-ui sanitize arm clean
+.PHONY: test test-c test-ui sanitize arm clean screens
 
 test: test-c test-ui
 
@@ -59,8 +59,15 @@ sanitize:
 		$(SRC) test/song_test.c -o build/song_test_san -lm
 	./build/song_test_san
 
-test-ui:
+test-ui: build/bridge
 	node test/ui_test.mjs
+
+build/bridge: $(SRC) tools/bridge.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SRC) tools/bridge.c -o $@ -lm
+
+screens: build/bridge
+	node tools/screens.mjs
 
 arm:
 	./scripts/build.sh

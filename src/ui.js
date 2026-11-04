@@ -32,7 +32,8 @@ const WHITE = 120, GREY = 124, DARK = 119, OFF = 0, LED_BRIGHT = 127, LED_DIM = 
 
 /* ---------- tracks ---------- */
 const TRACKS = 16;
-const TRACK_HUES = [1, 2, 3, 5, 8, 9, 11, 12, 14, 16, 17, 18, 19, 21, 23, 25];
+/* bright palette entries (each has dim partners at 63+2i / 64+2i), around the colour wheel */
+const TRACK_HUES = [1, 3, 8, 7, 9, 11, 13, 15, 16, 17, 18, 21, 22, 23, 26, 25];
 const trackBright = t => TRACK_HUES[t];
 const trackDim = t => 63 + 2 * TRACK_HUES[t];
 
@@ -863,8 +864,11 @@ function drawBody(hs, hot) {
             drawCell(k, name, fmt(v, values[track]), v / max, hot(k), locked);
         }
         if (hot(0) && page === 0) {
-            fill_rect(0, 54, 128, 10, 0);
-            print(2, 55, `ALGO ${ALGO_NAMES[values[track][0]]}`, 1);
+            /* routing takes over the lower half while the algorithm knob moves */
+            fill_rect(0, 37, 128, 27, 0);
+            draw_rect(0, 38, 128, 26, 1);
+            print(4, 42, `ALGORITHM ${values[track][0] + 1}`, 1);
+            print(4, 53, ALGO_NAMES[values[track][0]], 1);
         }
     } else if (page === PAGE_STEP) {
         if (!hs) {
@@ -874,15 +878,13 @@ function drawBody(hs, hot) {
             print(2, 42, 'New-step defaults.', 1);
             print(2, 52, 'Hold a step to edit', 1);
         } else if (hs[1].fields) {
+            const f = hs[1].fields, chord = [f[F.NOTE1], f[F.NOTE2], f[F.NOTE3]].filter(n => n > 0).length;
             STEP_KNOBS.forEach(([name, max, min, fmt], k) => {
                 const v = stepKnobValue(hs[1], k);
-                drawCell(k, name, fmt(v), max - min > 1 ? (v - min) / (max - min) : null, hot(k), false);
+                /* a chord shows as "+N" after the root note */
+                const text = k === 1 && chord ? `${fmt(v)}+${chord}` : fmt(v);
+                drawCell(k, name, text, max - min > 1 ? (v - min) / (max - min) : null, hot(k), false);
             });
-            const f = hs[1].fields, chord = [f[F.NOTE1], f[F.NOTE2], f[F.NOTE3]].filter(n => n > 0);
-            if (chord.length && !hot(1)) {
-                fill_rect(0, 54, 128, 10, 0);
-                print(2, 55, `+ ${chord.map(noteName).join(' ')}`, 1);
-            }
         }
     } else if (page === PAGE_FX1 || page === PAGE_FX2) {
         const base = page === PAGE_FX2 ? 8 : 0;
