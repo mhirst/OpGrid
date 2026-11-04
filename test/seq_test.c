@@ -326,6 +326,16 @@ static void demo(const char *path) {
     og_step_set(g, 3, 8, OG_F_FLAGS, OG_STEP_NOTE); og_step_set(g, 3, 8, OG_F_NOTE0, 58);
     og_step_set(g, 3, 8, OG_F_NOTE1, 62); og_step_set(g, 3, 8, OG_F_NOTE2, 65); og_step_set(g, 3, 8, OG_F_LEN, 9);
 
+    /* milestone 4: sends, an LFO sweeping the chords' filter, a slow one on bass resonance */
+    og_set_param(g, 1, P_SDLY, 60);
+    og_set_param(g, 2, P_SREV, 30);
+    og_set_param(g, 3, P_SREV, 90); og_set_param(g, 3, P_SDLY, 50); og_set_param(g, 3, P_SCHO, 100);
+    og_set_param(g, 3, P_FTYP, OG_FILTER_LP24); og_set_param(g, 3, P_FREQ, 70);
+    og_set_param(g, 3, P_L1DEST, OG_DEST_PARAM0 + P_FREQ); og_set_param(g, 3, P_L1WAVE, OG_WAVE_TRI);
+    og_set_param(g, 3, P_L1RATE, 6 * 128 / OG_LFO_SYNC_RATES + 1); og_set_param(g, 3, P_L1DPTH, 100);
+    og_set_param(g, 2, P_L1DEST, OG_DEST_PARAM0 + P_RESO); og_set_param(g, 2, P_L1RATE, 2 * 128 / OG_LFO_SYNC_RATES + 1);
+    og_set_param(g, 2, P_L1DPTH, 90);
+    og_set_fx(g, FX_MTHR, 90); og_set_fx(g, FX_MRAT, 40); og_set_fx(g, FX_MGAIN, 25);
     og_play(g, 1);
     long frames = (long)(step_len(122) * 16 * 8);
     float *out = calloc((size_t)frames * 2, sizeof(float));

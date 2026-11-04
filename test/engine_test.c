@@ -160,6 +160,12 @@ static void bench(void) {
         og_set_param(g, t, P_FDBK, 64);
         og_set_param(g, t, P_GLID, 20);
         og_set_param(g, t, P_ASUS, 127);
+        og_set_param(g, t, P_SDLY, 90); og_set_param(g, t, P_SREV, 90); og_set_param(g, t, P_SCHO, 90);
+        for (int i = 0; i < OG_LFOS; i++) {
+            og_set_param(g, t, P_LFO(i, LFO_DEST), OG_DEST_PARAM0 + P_FREQ - i);
+            og_set_param(g, t, P_LFO(i, LFO_DPTH), 100);
+            og_set_param(g, t, P_LFO(i, LFO_TRIG), i & 1);
+        }
     }
     for (int i = 0; i < OG_VOICES; i++) og_note_on(g, i, 40 + i * 3, 100);
     float buf[2 * BLOCK];
@@ -173,7 +179,7 @@ static void bench(void) {
         total += dt;
         if (dt > worst) worst = dt;
     }
-    printf("bench: %d voices, avg %.1f us/block, worst %.1f us/block (this machine)\n",
+    printf("bench (12 voices, 3 LFOs each, all FX): %d voices, avg %.1f us/block, worst %.1f us/block (this machine)\n",
            og_active_voices(g), total / blocks, worst);
     og_destroy(g);
 }
@@ -246,7 +252,7 @@ static void demo(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--dump-seq")) {
-        printf("%d %d %d\n", OG_CONDS, OG_LENS, OG_SPEEDS);
+        printf("%d %d %d %d %d %d %d\n", OG_CONDS, OG_LENS, OG_SPEEDS, OG_DESTS, OG_WAVES, OG_LFO_SYNC_RATES, OG_DELAY_TIMES);
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "--dump-params")) {

@@ -26,6 +26,13 @@
  *   get "step:<t>:<s>"   comma list of the OG_FIELDS step fields
  *   get "locks:<t>:<s>"  "pid=val,..."
  *   get "clip:<t>"       "length,speed,swing,locks_used,muted"
+ *
+ * Effects and mixer:
+ *   set "fx"   "<id> <v>"      global effect parameter (FX_*)
+ *   set "solo" "<t> <0|1>"
+ *   get "fx"                   comma list of all FX values
+ *   get "mix"                  16 chars per row: mute flags, then 16 solo flags
+ *   get "gr"                   master compressor gain (0..1)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,6 +58,15 @@ static int parse_ints(const char *s, int *out, int max) {
     return n;
 }
 
+/* MIDI out to the USB-A port: USB-MIDI packet, cable 0. Lock-free ring in
+ * the host; safe on the audio thread. */
+static void midi_out(void *ctx, uint8_t st, uint8_t d1, uint8_t d2) {
+    (void)ctx;
+    if (!g_host || !g_host->midi_send_external) return;
+    uint8_t pkt[4] = { (uint8_t)(st >> 4), st, d1, d2 };
+    g_host->midi_send_external(pkt, 4);
+}
+
 static void *plug_create(const char *module_dir, const char *json_defaults) {
     (void)module_dir;
     (void)json_defaults;
@@ -60,6 +76,7 @@ static void *plug_create(const char *module_dir, const char *json_defaults) {
     in->g = og_create(sr);
     if (!in->g) { free(in); return NULL; }
     in->sync = 1;
+    og_set_midi_out(in->g, midi_out, NULL);
     return in;
 }
 
@@ -104,6 +121,10 @@ static void plug_set(void *inst, const char *key, const char *val) {
         in->sync = val && atoi(val);
     } else if (!strcmp(key, "fill")) {
         og_set_fill(g, val && atoi(val));
+    } else if (!strcmp(key, "fx")) {
+        if (parse_ints(val, a, 2) == 2) og_set_fx(g, a[0], a[1]);
+    } else if (!strcmp(key, "solo")) {
+        if (parse_ints(val, a, 2) == 2) og_set_solo(g, a[0], a[1]);
     } else if (!strcmp(key, "mute")) {
         if (parse_ints(val, a, 2) == 2) og_set_mute(g, a[0], a[1]);
     } else if (!strcmp(key, "stog")) {
@@ -144,6 +165,22 @@ static int plug_get(void *inst, const char *key, char *buf, int buf_len) {
         return w;
     }
     if (!strcmp(key, "play")) return snprintf(buf, (size_t)buf_len, "%d", og_is_playing(g));
+    if (!strcmp(key, "fx")) {
+        int w = 0;
+        for (int i = 0; i < FX_COUNT && w < buf_len - 5; i++)
+            w += snprintf(buf + w, (size_t)(buf_len - w), i ? ",%d" : "%d", og_get_fx(g, i));
+        return w;
+    }
+    if (!strcmp(key, "mix")) {
+        if (buf_len < 2 * OG_TRACKS + 1) return -1;
+        for (int t = 0; t < OG_TRACKS; t++) {
+            buf[t] = (char)('0' + og_get_mute(g, t));
+            buf[OG_TRACKS + t] = (char)('0' + og_get_solo(g, t));
+        }
+        buf[2 * OG_TRACKS] = 0;
+        return 2 * OG_TRACKS;
+    }
+    if (!strcmp(key, "gr")) return snprintf(buf, (size_t)buf_len, "%.3f", og_debug_comp_gain(g));
     if (!strcmp(key, "tempo")) return snprintf(buf, (size_t)buf_len, "%.1f", og_get_tempo(g));
     if (!strcmp(key, "sync")) return snprintf(buf, (size_t)buf_len, "%d", in->sync);
     if (!strcmp(key, "pos")) {
@@ -156,10 +193,10 @@ static int plug_get(void *inst, const char *key, char *buf, int buf_len) {
     if (!strncmp(key, "steps:", 6)) {
         int t = atoi(key + 6);
         if (buf_len < OG_STEPS + 1) return -1;
+        uint64_t lm = og_lock_steps(g, t);
         for (int s2 = 0; s2 < OG_STEPS; s2++) {
-            int f = og_step_get(g, t, s2, OG_F_FLAGS) & 7, has = 0;
-            for (int p = 0; p < P_COUNT_USED && !has; p++) has = og_lock_get(g, t, s2, p) >= 0;
-            buf[s2] = (char)('0' + (f | (has ? 8 : 0)));
+            int f = og_step_get(g, t, s2, OG_F_FLAGS) & 7;
+            buf[s2] = (char)('0' + (f | ((lm >> s2) & 1 ? 8 : 0)));
         }
         buf[OG_STEPS] = 0;
         return OG_STEPS;

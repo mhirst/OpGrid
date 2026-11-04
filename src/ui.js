@@ -46,6 +46,34 @@ const ratio = v => RATIOS[v] || '?';
 const hold = v => v >= 127 ? 'HOLD' : `${v}`;
 const pan = v => v === 64 ? 'C' : v < 64 ? `L${64 - v}` : `R${v - 64}`;
 
+/* LFO destinations: OFF, PITCH, every sound param 0..31, then the 3 sends */
+const DEST_NAMES = ['OFF', 'PTCH',
+    'ALGO', 'RAT1', 'RAT2', 'RAT3', 'RAT4', 'LVL2', 'LVL3', 'LVL4',
+    'FDBK', 'DEC2', 'DEC3', 'DEC4', 'DTUN', 'VELM', 'TUNE', 'GLID',
+    'FREQ', 'RESO', 'FTYP', 'FENV', 'FATK', 'FDEC', 'FSUS', 'FREL',
+    'AATK', 'ADEC', 'ASUS', 'AREL', 'DRIV', 'PAN', 'VOL', 'VELA',
+    'SDLY', 'SREV', 'SCHO'];
+const WAVES = ['SIN', 'TRI', 'SQR', 'SAW', 'RAMP', 'RND'];
+const SYNC_RATES = ['8BAR', '6BAR', '4BAR', '3BAR', '2BAR', '6/4', '1BAR', '3/4', '1/2', '3/8',
+    '1/4', '3/16', '1/8', '3/32', '1/16', '1/32', '1/64'];
+const lfoHz = v => 0.05 * Math.pow(2, v / 127 * 10);
+const hz = f => f < 1 ? f.toFixed(2) : f < 10 ? f.toFixed(1) : `${Math.round(f)}Hz`;
+/* rate shows a note length when synced, Hz when free (formatter gets the track's values) */
+const lfoRate = i => (v, vals) => vals && vals[32 + 8 * (i - 1) + 2]
+    ? SYNC_RATES[Math.floor(v * SYNC_RATES.length / 128)] : hz(lfoHz(v));
+function lfoParams(i) {
+    return [
+        ['DEST', `LFO ${i} destination`, DEST_NAMES.length - 1, 0, v => DEST_NAMES[v]],
+        ['WAVE', `LFO ${i} wave`, WAVES.length - 1, 0, v => WAVES[v]],
+        ['SYNC', `LFO ${i} sync`, 1, 1, v => v ? 'SYNC' : 'FREE'],
+        ['RATE', `LFO ${i} rate`, 127, 64, lfoRate(i)],
+        ['DPTH', `LFO ${i} depth`, 127, 64, v => { const d = v - 64; return d > 0 ? `+${d}` : `${d}`; }],
+        ['TRIG', `LFO ${i} trigger`, 1, 0, v => v ? 'TRIG' : 'FREE'],
+        ['PHAS', `LFO ${i} phase`, 127, 0, v => `${Math.round(v * 360 / 128)}`],
+        ['FADE', `LFO ${i} fade`, 127, 0, v => v ? `${v}` : 'OFF'],
+    ];
+}
+
 /* [short name, long name, max, default, formatter] per param id */
 const PARAMS = [
     ['ALGO', 'Algorithm', 7, 0, v => `${v + 1}`],
@@ -68,11 +96,33 @@ const PARAMS = [
     ['SUS', 'Amp sustain', 127, 90, num], ['REL', 'Amp release', 127, 50, num],
     ['DRIV', 'Drive', 127, 0, num], ['PAN', 'Pan', 127, 64, pan],
     ['VOL', 'Volume', 127, 100, num], ['VEL', 'Vel > amp', 127, 64, num],
+    ...lfoParams(1), ...lfoParams(2), ...lfoParams(3),
+    ['DLY', 'Delay send', 127, 0, num], ['REV', 'Reverb send', 127, 0, num],
+    ['CHO', 'Chorus send', 127, 0, num], ['MCH', 'MIDI channel', 16, 0, v => v ? `CH${v}` : 'OFF'],
+    ['MODE', 'MIDI mode', 2, 0, v => ['INT', 'EXT', 'BOTH'][v]],
+    ['', '', 0, 0, () => ''], ['', '', 0, 0, () => ''], ['', '', 0, 0, () => ''],
 ];
 const NPARAMS = PARAMS.length;
-const SOUND_PAGES = NPARAMS / 8;            /* FM, FM 2, FILTER, AMP */
-const PAGES = ['FM', 'FM 2', 'FILTER', 'AMP', 'STEP', 'CLIP'];
-const PAGE_STEP = 4, PAGE_CLIP = 5;
+const SOUND_PAGES = NPARAMS / 8;            /* FM, FM 2, FILTER, AMP, LFO 1-3, SEND */
+const PAGES = ['FM', 'FM 2', 'FILTER', 'AMP', 'LFO 1', 'LFO 2', 'LFO 3', 'SEND', 'STEP', 'CLIP', 'FX 1', 'FX 2'];
+const PAGE_STEP = 8, PAGE_CLIP = 9, PAGE_FX1 = 10, PAGE_FX2 = 11;
+/* header titles for the global FX pages (they are not per track) */
+const FX_TITLES = ['DELAY+REVERB', 'CHORUS+MASTR'];
+const P_VOL = 30;
+
+/* global effects (must match og_fx.c): [name, max, default, formatter] */
+const DTIMES = ['1/32', '1/16T', '1/16', '1/8T', '1/16D', '1/8', '1/4T', '1/8D', '1/4', '1/2T', '1/4D', '1/2', '1BAR'];
+const FX = [
+    ['TIME', 12, 7, v => DTIMES[v]], ['FDBK', 127, 50, num], ['PING', 127, 64, num],
+    ['TONE', 127, 64, v => { const d = v - 64; return d === 0 ? 'FLAT' : d < 0 ? `LP${-d}` : `HP${d}`; }],
+    ['SIZE', 127, 80, num], ['DCAY', 127, 70, num], ['PRE', 127, 10, v => `${Math.round(v / 127 * 200)}ms`],
+    ['DAMP', 127, 60, num],
+    ['DPTH', 127, 60, num], ['RATE', 127, 30, num], ['WIDE', 127, 100, num],
+    ['THR', 127, 127, v => v >= 127 ? 'OFF' : `${Math.round(-40 + v / 127 * 40)}dB`],
+    ['RAT', 127, 32, v => `${Math.round(1 + v / 127 * 19)}:1`],
+    ['GAIN', 127, 0, v => `+${Math.round(v / 127 * 18)}dB`], ['DRIV', 127, 0, num], ['VOL', 127, 100, num],
+];
+const fxValues = FX.map(f => f[2]);
 
 /* ---------- step fields (must match OG_F_* / og_seq.c) ---------- */
 const F = { FLAGS: 0, NOTE0: 1, NOTE1: 2, NOTE2: 3, NOTE3: 4, VEL: 5, LEN: 6, RAT: 7, COND: 8, MICRO: 9 };
@@ -110,7 +160,9 @@ const CLIP_KNOBS = [
 
 /* ---------- state ---------- */
 let track = 0, page = 0, octave = 1, stepPage = 0;
-let shift = false, muteHeld = false, deleteHeld = false, fillOn = false;
+let shift = false, muteHeld = false, muteUsed = false, deleteHeld = false, fillOn = false;
+let mixer = false, mixBank = 0;
+const solo = new Array(16).fill(0);
 let playing = false, tempo = 120, sync = 1;
 let touchedKnob = -1, touchedUntil = 0, tickCount = 0;
 let dirty = true, stepsDirty = true;
@@ -159,6 +211,48 @@ function pullSteps(t) {
     if (s && s.length >= 64)
         for (let i = 0; i < 64; i++) stepFlags[t][i] = s.charCodeAt(i) - 48;
     stepsDirty = false;
+}
+
+function pullFx() {
+    const f = ints(getParam('fx'));
+    if (f.length === FX.length && f.every(Number.isFinite)) f.forEach((v, i) => { fxValues[i] = clamp(v, 0, FX[i][1]); });
+}
+
+function pullMix() {
+    const m = getParam('mix');
+    if (!m || m.length < 32) return;
+    for (let t = 0; t < TRACKS; t++) { clipInfo[t].mute = m.charCodeAt(t) - 48; solo[t] = m.charCodeAt(16 + t) - 48; }
+}
+
+function editFx(knob, delta) {
+    const id = (page === PAGE_FX2 ? 8 : 0) + knob;
+    const [, max] = FX[id];
+    touch(knob);
+    const next = clamp(fxValues[id] + delta, 0, max);
+    if (next === fxValues[id]) return;
+    fxValues[id] = next;
+    setParam('fx', `${id} ${next}`);
+}
+
+function editMixer(knob, delta) {
+    const t = mixBank * 8 + knob;
+    touch(knob);
+    const next = clamp(values[t][P_VOL] + delta, 0, 127);
+    if (next === values[t][P_VOL]) return;
+    values[t][P_VOL] = next;
+    setParam('p', `${t} ${P_VOL} ${next}`);
+}
+
+function toggleMute(t) {
+    clipInfo[t].mute = clipInfo[t].mute ? 0 : 1;
+    setParam('mute', `${t} ${clipInfo[t].mute}`);
+    dirty = true;
+}
+
+function toggleSolo(t) {
+    solo[t] = solo[t] ? 0 : 1;
+    setParam('solo', `${t} ${solo[t]}`);
+    dirty = true;
 }
 
 function pullTransport() {
@@ -342,13 +436,17 @@ function padToNote(i) {
 }
 
 function onPad(i, vel, on) {
+    if (mixer) {
+        /* bottom 16 pads: mute (Shift = solo); top 16: select track */
+        if (!on) return;
+        if (i < 16) { if (shift) toggleSolo(i); else toggleMute(i); }
+        else selectTrack(i - 16);
+        return;
+    }
     if (on && shift) { if (i < 16) selectTrack(i); return; }
     if (on && muteHeld) {
-        if (i < 16) {
-            clipInfo[i].mute = clipInfo[i].mute ? 0 : 1;
-            setParam('mute', `${i} ${clipInfo[i].mute}`);
-            dirty = true;
-        }
+        muteUsed = true;
+        if (i < 16) toggleMute(i);
         return;
     }
     if (on) {
@@ -392,28 +490,39 @@ globalThis.onMidiMessageInternal = function (data) {
     if (d1 >= KNOB0 && d1 < KNOB0 + 8) {
         const knob = d1 - KNOB0;
         let small;
-        if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && PARAMS[pid][2] < 32; }
+        if (mixer) small = false;
+        else if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && PARAMS[pid][2] < 40; }
         else if (page === PAGE_STEP) small = knob !== 1 && knob !== 2;
-        else small = knob === 1 || knob === 4;
+        else if (page === PAGE_CLIP) small = knob === 1 || knob === 4;
+        else small = FX[(page === PAGE_FX2 ? 8 : 0) + knob][1] < 40;
         const raw = small ? decodeDelta(d2) : decodeAcceleratedDelta(d2, knob);
         const delta = shift && !small ? Math.sign(raw) : raw;
         if (!delta) return;
-        if (page < SOUND_PAGES) editSound(knob, delta);
+        if (mixer) editMixer(knob, delta);
+        else if (page < SOUND_PAGES) editSound(knob, delta);
         else if (page === PAGE_STEP) editStep(knob, delta);
-        else editClip(knob, delta);
+        else if (page === PAGE_CLIP) editClip(knob, delta);
+        else editFx(knob, delta);
         return;
     }
     const press = d2 > 0;
     switch (d1) {
     case CC_SHIFT: shift = press; updateFill(); dirty = true; break;
-    case CC_MUTE: muteHeld = press; updateFill(); dirty = true; break;
+    case CC_MUTE:
+        if (press) { muteHeld = true; muteUsed = shift; }
+        else {
+            muteHeld = false;
+            /* a tap on Mute (no pads, no Shift) toggles mixer mode */
+            if (!muteUsed && !shift) { mixer = !mixer; if (mixer) pullMix(); }
+        }
+        updateFill(); dirty = true; break;
     case CC_DELETE: deleteHeld = press; break;
     case CC_PLAY:
         if (press) { playing = !playing; setParam('play', playing ? 1 : 0); dirty = true; }
         break;
     case JOG: { const dl = decodeDelta(d2); if (dl) changePage(dl); break; }
-    case CC_LEFT: if (press) changePage(-1); break;
-    case CC_RIGHT: if (press) changePage(1); break;
+    case CC_LEFT: if (press) { if (mixer) { mixBank = 0; dirty = true; } else changePage(-1); } break;
+    case CC_RIGHT: if (press) { if (mixer) { mixBank = 1; dirty = true; } else changePage(1); } break;
     case CC_UP: if (press) { octave = Math.min(6, octave + 1); dirty = true; } break;
     case CC_DOWN: if (press) { octave = Math.max(-2, octave - 1); dirty = true; } break;
     default: break;
@@ -424,6 +533,7 @@ globalThis.onMidiMessageExternal = function () { /* DSP handles external notes *
 
 function updateFill() {
     const f = shift && muteHeld;
+    if (f) muteUsed = true;
     if (f !== fillOn) { fillOn = f; setParam('fill', f ? 1 : 0); }
 }
 
@@ -431,6 +541,7 @@ function changePage(d) {
     page = (page + d + PAGES.length) % PAGES.length;
     touchedKnob = -1;
     if (page === PAGE_CLIP) { pullClip(track); pullTransport(); }
+    if (page === PAGE_FX1 || page === PAGE_FX2) pullFx();
     dirty = true;
 }
 
@@ -453,8 +564,13 @@ function stepColor(i) {
 }
 
 function padColor(i) {
+    if (mixer) {
+        if (i < 16) return solo[i] ? WHITE : clipInfo[i].mute ? trackDim(i) : trackBright(i);
+        const t = i - 16;
+        return t === track ? WHITE : trackDim(t);
+    }
     if (shift) return i < 16 ? (i === track ? trackBright(i) : trackDim(i)) : OFF;
-    if (muteHeld) return i < 16 ? (clipInfo[i].mute ? OFF : trackBright(i)) : OFF;
+    if (muteHeld) return i < 16 ? (clipInfo[i].mute ? trackDim(i) : trackBright(i)) : OFF;
     if (padNote[i] >= 0) return WHITE;
     const n = padToNote(i);
     return n > 127 ? OFF : (n % 12 === 0 ? trackBright(track) : trackDim(track));
@@ -468,7 +584,7 @@ function desiredLeds() {
     out.push(['c', CC_LEFT, LED_DIM], ['c', CC_RIGHT, LED_DIM]);
     out.push(['c', CC_UP, octave < 6 ? LED_DIM : OFF], ['c', CC_DOWN, octave > -2 ? LED_DIM : OFF]);
     out.push(['c', CC_SHIFT, shift ? LED_BRIGHT : LED_DIM]);
-    out.push(['c', CC_MUTE, muteHeld ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_MUTE, muteHeld || mixer ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_DELETE, deleteHeld ? LED_BRIGHT : LED_DIM]);
     return out;
 }
@@ -504,8 +620,10 @@ function drawHeader() {
     const hs = firstHeld();
     let left = `T${String(track + 1).padStart(2, '0')}`;
     left += hs ? ` STEP ${hs[0] + 1}` : (clipInfo[track].mute ? ' MUTED' : ' FM POLY');
+    if (!mixer && (page === PAGE_FX1 || page === PAGE_FX2)) left = FX_TITLES[page - PAGE_FX1];
+    if (mixer) left = `TRACKS ${mixBank * 8 + 1}-${mixBank * 8 + 8}`;
     print(2, 1, left, 0);
-    const right = `${playing ? '>' : '.'} ${PAGES[page]}`;
+    const right = `${playing ? '>' : '.'} ${mixer ? 'MIX' : (page === PAGE_FX1 || page === PAGE_FX2) ? '' : PAGES[page]}`;
     print(126 - text_width(right), 1, right, 0);
 }
 
@@ -515,13 +633,15 @@ function drawScreen() {
     const hs = firstHeld();
     const hot = k => k === touchedKnob && tickCount < touchedUntil;
 
+    if (mixer) { drawMixer(hot); return; }
     if (page < SOUND_PAGES) {
         for (let k = 0; k < 8; k++) {
             const pid = page * 8 + k;
             const [name, , max, , fmt] = PARAMS[pid];
+            if (!name) continue;
             const locked = hs && hs[1].locks.has(pid);
             const v = clamp(locked ? hs[1].locks.get(pid) : values[track][pid] | 0, 0, max);
-            drawCell(k, name, fmt(v), v / max, hot(k), locked);
+            drawCell(k, name, fmt(v, values[track]), v / max, hot(k), locked);
         }
         if (hot(0) && page === 0) {
             fill_rect(0, 54, 128, 10, 0);
@@ -545,6 +665,13 @@ function drawScreen() {
                 print(2, 55, `+ ${chord.map(noteName).join(' ')}`, 1);
             }
         }
+    } else if (page === PAGE_FX1 || page === PAGE_FX2) {
+        const base = page === PAGE_FX2 ? 8 : 0;
+        for (let k = 0; k < 8; k++) {
+            const [name, max, , fmt] = FX[base + k];
+            const v = fxValues[base + k];
+            drawCell(k, name, fmt(v), v / max, hot(k), false);
+        }
     } else {
         CLIP_KNOBS.forEach(([name, max, min, fmt], k) => {
             const v = clipKnobValue(k);
@@ -554,10 +681,27 @@ function drawScreen() {
     }
 }
 
+function drawMixer(hot) {
+    for (let k = 0; k < 8; k++) {
+        const t = mixBank * 8 + k;
+        const x = k * 16, v = values[t][P_VOL];
+        if (t === track) fill_rect(x, 11, 16, 9, 1);
+        print(x + 2, 12, `${t + 1}`, t === track ? 0 : 1);
+        const h = Math.round(v / 127 * 30);
+        draw_rect(x + 4, 22, 8, 32, 1);
+        if (h > 0) fill_rect(x + 5, 53 - h, 6, h, 1);
+        const flag = solo[t] ? 'S' : clipInfo[t].mute ? 'M' : '';
+        if (flag) print(x + 5, 56, flag, 1);
+        if (hot(k)) draw_rect(x + 2, 21, 12, 34, 1);
+    }
+}
+
 /* ---------- lifecycle ---------- */
 globalThis.init = function () {
     for (let t = 0; t < TRACKS; t++) pullTrack(t);
     pullTransport();
+    pullFx();
+    pullMix();
     playing = getParam('play') === '1';
     ledCache.clear();
     dirty = true;
@@ -595,6 +739,7 @@ globalThis.tick = function () {
 
 /* exported for tests */
 globalThis.__opgrid = {
-    PARAMS, PAGES, CONDS, LENS, SPEEDS, values, stepFlags, clipInfo, held,
-    state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync }),
+    PARAMS, PAGES, CONDS, LENS, SPEEDS, FX, DEST_NAMES, WAVES, SYNC_RATES, fxValues, solo,
+    values, stepFlags, clipInfo, held,
+    state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync, mixer, mixBank }),
 };

@@ -2,7 +2,7 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module.
 
-**Status: milestone 3 of 8** — FM Poly engine, 12-voice pool, and a 16-track step sequencer with step locks, conditions, micro-timing, ratchets, chords and swing. No clip launching, saving or song mode yet.
+**Status: milestone 4 of 8** — FM Poly engine, 12-voice pool, 16-track step sequencer (step locks, conditions, micro-timing, ratchets, chords, swing), 3 LFOs per track, shared delay/reverb/chorus, master compressor, mixer and MIDI out. No clip launching, saving or song mode yet.
 
 ## Build and install
 
@@ -27,17 +27,30 @@ Requires Schwung installed on the Move.
 | Pads | Play the selected track (rows are a fourth apart) |
 | Shift + pad (bottom 16) | Select track 1–16 |
 | Mute + pad (bottom 16) | Mute / unmute a track |
+| Mute (tap) | Mixer mode on / off |
 | Shift + Mute (hold) | Fill mode |
 | Knobs 1–8 | Edit the page's 8 values (Shift = fine) |
-| Jog wheel / Left / Right | Change page: FM, FM 2, FILTER, AMP, STEP, CLIP |
+| Jog wheel / Left / Right | Change page: FM, FM 2, FILTER, AMP, LFO 1–3, SEND, STEP, CLIP, FX 1, FX 2 |
 | Up / Down | Octave |
 | Back | Leave; music keeps playing. Shift + Vol touch + Jog click exits fully |
 
 External MIDI: channel N plays track N.
 
+### Mixer mode (tap Mute)
+
+| Control | Action |
+|---|---|
+| Bottom 16 pads | Mute / unmute track (Shift = solo) |
+| Top 16 pads | Select track |
+| Knobs 1–8 | Track volume (Left = tracks 1–8, Right = 9–16) |
+
 ### Pages
 
 - **STEP** (hold a step): type (note / lock-only), note, velocity, length, micro-timing (±23/48 step), ratchets (1–8), condition, slide. With no step held, NOTE/VEL/LEN set the defaults for new steps.
+- **LFO 1–3** (per track, lockable): destination (pitch, any sound value or send), wave (sine, triangle, square, saw, ramp, random), sync or free, rate, depth (±), trigger (free-running or restart per note), phase, fade-in.
+- **SEND**: delay, reverb and chorus sends; MIDI channel (OFF or 1–16) and mode (INT = internal sound only, EXT = MIDI to USB-A only, BOTH).
+- **FX 1** (global): delay time (synced, 1/32 to 1 bar, dotted and triplet), feedback, ping-pong, tone (low-pass ↔ high-pass); reverb size, decay, pre-delay, damping.
+- **FX 2** (global): chorus depth, rate, width; master compressor threshold, ratio, makeup gain; master drive and volume.
 - **CLIP**: length (1–64), speed (1/8x–2x), swing (50–80%), tempo, and tempo source (MOVE = follow Move's tempo, OWN = this module's).
 
 ### Step conditions
@@ -71,6 +84,7 @@ When an operator other than 1 is heard (a carrier), its LVL knob sets its volume
 
 - `src/og_engine.c/.h` — voices and DSP (no allocation or I/O on the audio thread)
 - `src/og_seq.c` — sequencer, runs every 16 samples inside the audio callback
+- `src/og_fx.c` — delay, reverb, chorus, master bus
 - `src/og_plugin.c` — Schwung plugin API v2 glue and param protocol
 - `src/ui.js` — screen, pads, knobs, LEDs
-- `test/` — C engine and sequencer tests (incl. a 10-minute drift test), Node UI tests with a fake host
+- `test/` — C engine, sequencer and effects tests (incl. a 10-minute drift test and a 20 s max-feedback stability test), Node UI tests with a fake host

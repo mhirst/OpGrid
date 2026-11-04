@@ -190,6 +190,14 @@ int og_lock_get(const og_t *g, int track, int step, int pid) {
     return -1;
 }
 
+uint64_t og_lock_steps(const og_t *g, int track) {
+    if (!g || !track_ok(track)) return 0;
+    const og_clip_t *c = cur_clip_c(g, track);
+    uint64_t m = 0;
+    for (int i = 0; i < OG_LOCKS; i++) if (c->locks[i].used) m |= 1ull << c->locks[i].step;
+    return m;
+}
+
 int og_lock_count(const og_t *g, int track) {
     if (!g || !track_ok(track)) return 0;
     const og_clip_t *c = cur_clip_c(g, track);
@@ -290,7 +298,7 @@ static void fire(og_t *g, int track, long n, int s, int j, double at) {
     if (!ts->last_ok) return;
 
     ts->cur_step = s;
-    if (ts->mute) return;
+    if (!og__track_audible(g, track)) return;
 
     if (st->flags & OG_STEP_NOTE) {
         int rat = st->rat < 1 ? 1 : st->rat;

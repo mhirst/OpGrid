@@ -37,6 +37,12 @@ typedef struct {
     float    amp_out;
     float    ic1[2], ic2[2];
 
+    /* LFOs */
+    float    lfo_ph[OG_LFOS];       /* own phase (retrig mode) 0..1 */
+    float    lfo_rnd[OG_LFOS];      /* current random value */
+    float    lfo_age;               /* seconds since note start (fade-in) */
+    int      ext_only;              /* MIDI-out only: no internal sound */
+
     int      fade;
     int      pending;
     int      pend_track, pend_note, pend_vel, pend_gate, pend_slide;
@@ -84,6 +90,25 @@ typedef struct {
 } og_noteoff_t;
 
 #define OG_NOTEOFFS 128
+#define OG_DELAY_MAX_S 2.0f
+
+/* per-tick mix buses */
+typedef struct {
+    float dry_l[OG_CTRL_RATE], dry_r[OG_CTRL_RATE];
+    float dly_l[OG_CTRL_RATE], dly_r[OG_CTRL_RATE];
+    float rev_l[OG_CTRL_RATE], rev_r[OG_CTRL_RATE];
+    float cho_l[OG_CTRL_RATE], cho_r[OG_CTRL_RATE];
+} og_bus_t;
+
+typedef struct {
+    int    p[FX_COUNT];
+    float *dly[2]; int dly_len, dly_w; float dly_cur, dly_lp[2], dly_hp[2];
+    float *pre; int pre_len, pre_w;
+    float *rev[4]; int rev_cap[4], rev_w[4]; float rev_lp[4];
+    float *ap[2]; int ap_len[2], ap_w[2];
+    float *cho[2]; int cho_len, cho_w; float cho_ph;
+    float  comp_env, comp_gain, last_gr;
+} og_fx_t;
 
 struct og {
     float    sr, inv_sr;
@@ -99,6 +124,12 @@ struct og {
     og_noteoff_t  offs[OG_NOTEOFFS];
     int      playing;
     int      fill;
+    int      solo[OG_TRACKS];
+    float    lfo_free[OG_TRACKS][OG_LFOS];  /* free-running LFO phases */
+    float    lfo_free_rnd[OG_TRACKS][OG_LFOS];
+    og_midi_out_fn midi_out;
+    void    *midi_ctx;
+    og_fx_t  fx;
     float    bpm;
     uint32_t rng;
 
@@ -118,6 +149,10 @@ void og__note_on_locked(og_t *g, int track, int note, int vel,
                         const og_lock_t *locks, int step, int slide);
 void og__apply_locks_to_track(og_t *g, int track, const og_lock_t *locks, int step);
 void og__seq_init(og_t *g);
+int  og__fx_init(og_t *g);
+void og__fx_free(og_t *g);
+void og__fx_process(og_t *g, const og_bus_t *b, float *out_l, float *out_r, int n);
+int  og__track_audible(const og_t *g, int track);
 void og__seq_advance(og_t *g, int frames);
 
 #endif

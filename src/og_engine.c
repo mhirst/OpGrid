@@ -57,6 +57,16 @@ static const pinfo_t k_pinfo[P_COUNT_USED] = {
                {0, 127}, {60, 127}, {127, 127}, {50, 127},
     /* AMP */  {0, 127}, {70, 127}, {90, 127}, {50, 127}, {0, 127}, {64, 127},
                {100, 127}, {64, 127},
+#define LFO_INFO {0, OG_DESTS - 1}, {0, OG_WAVES - 1}, {1, 1}, {64, 127}, \
+                 {64, 127}, {0, 1}, {0, 127}, {0, 127}
+    /* LFO1-3 */ LFO_INFO, LFO_INFO, LFO_INFO,
+#undef LFO_INFO
+    /* SEND */ {0, 127}, {0, 127}, {0, 127}, {0, 16}, {0, OG_MOUTS - 1}, {0, 0}, {0, 0}, {0, 0},
+};
+
+/* LFO sync rates: steps per cycle */
+static const float k_lfo_sync[OG_LFO_SYNC_RATES] = {
+    128, 96, 64, 48, 32, 24, 16, 12, 8, 6, 4, 3, 2, 1.5f, 1, 0.5f, 0.25f
 };
 
 /* ---- helpers -------------------------------------------------------- */
@@ -77,7 +87,8 @@ static inline uint32_t cyc(float c) { return (uint32_t)(int64_t)(c * TWO32); }
 static inline float soft_clip(float x) {
     if (x > 3.0f) return 1.0f;
     if (x < -3.0f) return -1.0f;
-    return x * (27.0f + x * x) / (27.0f + 9.0f * x * x);
+    float y = x * (27.0f + x * x) / (27.0f + 9.0f * x * x);
+    return y > 1.0f ? 1.0f : y < -1.0f ? -1.0f : y;   /* the rational form overshoots near |x|=3 */
 }
 
 static float env_seconds(int v) { return 0.0005f * powf(20000.0f, (float)v / 127.0f); }
@@ -118,10 +129,36 @@ og_t *og_create(float sample_rate) {
         g->last_pitch[t] = -1.0f;
     }
     og__seq_init(g);
+    if (!og__fx_init(g)) { og_destroy(g); return NULL; }
     return g;
 }
 
-void og_destroy(og_t *g) { free(g); }
+void og_destroy(og_t *g) {
+    if (!g) return;
+    og__fx_free(g);
+    free(g);
+}
+
+void og_set_solo(og_t *g, int track, int on) {
+    if (g && track >= 0 && track < OG_TRACKS) g->solo[track] = on ? 1 : 0;
+}
+int og_get_solo(const og_t *g, int track) {
+    return (g && track >= 0 && track < OG_TRACKS) ? g->solo[track] : 0;
+}
+int og__track_audible(const og_t *g, int track) {
+    if (g->ts[track].mute) return 0;
+    for (int t = 0; t < OG_TRACKS; t++) if (g->solo[t]) return g->solo[track];
+    return 1;
+}
+void og_set_midi_out(og_t *g, og_midi_out_fn fn, void *ctx) {
+    if (!g) return;
+    g->midi_out = fn;
+    g->midi_ctx = ctx;
+}
+
+static void midi_send(og_t *g, uint8_t st, uint8_t d1, uint8_t d2) {
+    if (g->midi_out) g->midi_out(g->midi_ctx, st, d1, d2);
+}
 
 /* ---- params --------------------------------------------------------- */
 
@@ -200,6 +237,12 @@ static void voice_start(og_t *g, voice_t *v, int track, int note, int vel,
         v->ic1[0] = v->ic1[1] = v->ic2[0] = v->ic2[1] = 0.0f;
     }
     for (int k = 2; k <= 4; k++) v->mod_env[k] = 1.0f;
+    v->lfo_age = 0.0f;
+    for (int i = 0; i < OG_LFOS; i++) {
+        v->lfo_ph[i] = (float)p[P_LFO(i, LFO_PHAS)] / 128.0f;
+        g->rng ^= g->rng << 13; g->rng ^= g->rng >> 17; g->rng ^= g->rng << 5;
+        v->lfo_rnd[i] = (float)(g->rng & 0xFFFF) / 32767.5f - 1.0f;
+    }
 }
 
 static voice_t *find_voice(og_t *g, int track, int note) {
@@ -236,6 +279,11 @@ static voice_t *steal_voice(og_t *g) {
 
 static void note_on_impl(og_t *g, int track, int note, int velocity,
                          const int *params, uint64_t lockmask, int slide) {
+    int ch = g->params[track][P_MCH], mode = g->params[track][P_MOUT];
+    if (ch > 0 && mode != OG_MOUT_INT) {
+        midi_send(g, (uint8_t)(0x90 | (ch - 1)), (uint8_t)note, (uint8_t)velocity);
+        if (mode == OG_MOUT_EXT) return;          /* external gear only */
+    }
     voice_t *v = find_voice(g, track, note);
     if (v) { voice_start(g, v, track, note, velocity, params, lockmask, slide); return; }
 
@@ -299,6 +347,11 @@ void og__apply_locks_to_track(og_t *g, int track, const og_lock_t *locks, int st
 
 void og_note_off(og_t *g, int track, int note) {
     if (!g) return;
+    if (track >= 0 && track < OG_TRACKS) {
+        int ch = g->params[track][P_MCH], mode = g->params[track][P_MOUT];
+        if (ch > 0 && mode != OG_MOUT_INT)
+            midi_send(g, (uint8_t)(0x80 | (ch - 1)), (uint8_t)note, 0);
+    }
     for (int i = 0; i < OG_VOICES; i++) {
         voice_t *v = &g->v[i];
         if (!v->active) continue;
@@ -314,6 +367,14 @@ void og_note_off(og_t *g, int track, int note) {
 
 void og_all_notes_off(og_t *g) {
     if (!g) return;
+    uint32_t sent = 0;
+    for (int t = 0; t < OG_TRACKS; t++) {
+        int ch = g->params[t][P_MCH];
+        if (ch > 0 && g->params[t][P_MOUT] != OG_MOUT_INT && !(sent & (1u << ch))) {
+            midi_send(g, (uint8_t)(0xB0 | (ch - 1)), 123, 0);   /* all notes off */
+            sent |= 1u << ch;
+        }
+    }
     for (int i = 0; i < OG_VOICES; i++) {
         voice_t *v = &g->v[i];
         v->pending = 0;
@@ -352,8 +413,74 @@ static inline float midi_hz(float semis) {
 }
 
 /* Render one voice for n samples (n <= OG_CTRL_RATE), adding into out. */
-static void voice_render(og_t *g, voice_t *v, float *out_l, float *out_r, int n) {
-    const int *p = v->p;
+static float lfo_wave(const og_t *g, int wave, float ph, float rnd) {
+    switch (wave) {
+    case OG_WAVE_TRI:  return 4.0f * fabsf(ph - 0.5f) - 1.0f;
+    case OG_WAVE_SQR:  return ph < 0.5f ? 1.0f : -1.0f;
+    case OG_WAVE_SAW:  return 2.0f * ph - 1.0f;
+    case OG_WAVE_RAMP: return 1.0f - 2.0f * ph;
+    case OG_WAVE_RND:  return rnd;
+    default:           return g->sine[(int)(ph * SINE_SIZE) & (SINE_SIZE - 1)];
+    }
+}
+
+/* LFO frequency in cycles per second for a set of LFO params */
+static float lfo_hz(const og_t *g, const int *p, int i) {
+    int rate = p[P_LFO(i, LFO_RATE)];
+    if (p[P_LFO(i, LFO_SYNC)]) {
+        float steps = k_lfo_sync[rate * OG_LFO_SYNC_RATES / 128];
+        float step_s = 60.0f / g->bpm / 4.0f;
+        return 1.0f / (steps * step_s);
+    }
+    return 0.05f * exp2f((float)rate / 127.0f * 10.0f);
+}
+
+static inline float next_rnd(og_t *g) {
+    g->rng ^= g->rng << 13; g->rng ^= g->rng >> 17; g->rng ^= g->rng << 5;
+    return (float)(g->rng & 0xFFFF) / 32767.5f - 1.0f;
+}
+
+/* Apply the voice's 3 LFOs to a copy of its params. Returns pitch offset. */
+static float apply_lfos(og_t *g, voice_t *v, int *pm, int n) {
+    float pitch = 0.0f;
+    float dt = (float)n * g->inv_sr;
+    v->lfo_age += dt;
+    for (int i = 0; i < OG_LFOS; i++) {
+        const int *vp = v->p;
+        int dest = vp[P_LFO(i, LFO_DEST)];
+        float ph, rnd;
+        if (vp[P_LFO(i, LFO_TRIG)]) {
+            v->lfo_ph[i] += lfo_hz(g, vp, i) * dt;
+            if (v->lfo_ph[i] >= 1.0f) { v->lfo_ph[i] -= floorf(v->lfo_ph[i]); v->lfo_rnd[i] = next_rnd(g); }
+            ph = v->lfo_ph[i]; rnd = v->lfo_rnd[i];
+        } else {
+            ph = g->lfo_free[v->track][i];
+            float off = (float)vp[P_LFO(i, LFO_PHAS)] / 128.0f;
+            ph += off; if (ph >= 1.0f) ph -= 1.0f;
+            rnd = g->lfo_free_rnd[v->track][i];
+        }
+        if (dest == OG_DEST_OFF) continue;
+        float depth = ((float)vp[P_LFO(i, LFO_DPTH)] - 64.0f) / 63.0f;
+        float amt = lfo_wave(g, vp[P_LFO(i, LFO_WAVE)], ph, rnd) * depth;
+        int fade = vp[P_LFO(i, LFO_FADE)];
+        if (fade > 0) {
+            float f = v->lfo_age / env_seconds(fade);
+            if (f < 1.0f) amt *= f;
+        }
+        if (dest == OG_DEST_PITCH) { pitch += amt * 12.0f; continue; }
+        int pid = dest >= OG_DEST_SEND0 ? P_SDLY + (dest - OG_DEST_SEND0) : dest - OG_DEST_PARAM0;
+        if (pid < 0 || pid >= P_COUNT_USED) continue;
+        int max = og_param_max(pid);
+        pm[pid] = clampi(pm[pid] + (int)lrintf(amt * (float)max), 0, max);
+    }
+    return pitch;
+}
+
+static void voice_render(og_t *g, voice_t *v, og_bus_t *bus, int n) {
+    int pm[P_COUNT_USED];
+    memcpy(pm, v->p, sizeof(pm));
+    float lfo_pitch = apply_lfos(g, v, pm, n);
+    const int *p = pm;
     const int algo = p[P_ALGO];
     const float velf = (float)v->vel / 127.0f;
 
@@ -366,7 +493,7 @@ static void voice_render(og_t *g, voice_t *v, float *out_l, float *out_r, int n)
     } else {
         v->pitch = v->target;
     }
-    float base = midi_hz(v->pitch);
+    float base = midi_hz(v->pitch + lfo_pitch);
 
     float det = (float)p[P_DTUN] / 127.0f * 0.02f;  /* up to ~35 cents */
     float rat[5];
@@ -437,6 +564,8 @@ static void voice_render(og_t *g, voice_t *v, float *out_l, float *out_r, int n)
     float dcomp = drive > 0.0f ? 1.0f / soft_clip(dgain) : 1.0f;
 
     float pl = g->pan_l[p[P_PAN]], pr = g->pan_r[p[P_PAN]];
+    float sd = (float)p[P_SDLY] / 127.0f, sr_ = (float)p[P_SREV] / 127.0f, sc = (float)p[P_SCHO] / 127.0f;
+    sd *= sd; sr_ *= sr_; sc *= sc;
 
     const float *t = g->sine;
     uint32_t ph1 = v->ph[1], ph2 = v->ph[2], ph3 = v->ph[3], ph4 = v->ph[4];
@@ -490,8 +619,11 @@ static void voice_render(og_t *g, voice_t *v, float *out_l, float *out_r, int n)
             }
         }
         y *= gsm;
-        out_l[s] += y * pl;
-        out_r[s] += y * pr;
+        float yl = y * pl, yr = y * pr;
+        bus->dry_l[s] += yl; bus->dry_r[s] += yr;
+        bus->dly_l[s] += yl * sd; bus->dly_r[s] += yr * sd;
+        bus->rev_l[s] += yl * sr_; bus->rev_r[s] += yr * sr_;
+        bus->cho_l[s] += yl * sc; bus->cho_r[s] += yr * sc;
     }
 
     v->ph[1] = ph1; v->ph[2] = ph2; v->ph[3] = ph3; v->ph[4] = ph4;
@@ -511,15 +643,26 @@ static void voice_render(og_t *g, voice_t *v, float *out_l, float *out_r, int n)
 
 /* ---- render --------------------------------------------------------- */
 
+static void advance_free_lfos(og_t *g, int n) {
+    float dt = (float)n * g->inv_sr;
+    for (int t = 0; t < OG_TRACKS; t++)
+        for (int i = 0; i < OG_LFOS; i++) {
+            float *ph = &g->lfo_free[t][i];
+            *ph += lfo_hz(g, g->params[t], i) * dt;
+            if (*ph >= 1.0f) { *ph -= floorf(*ph); g->lfo_free_rnd[t][i] = next_rnd(g); }
+        }
+}
+
 void og_render_float(og_t *g, float *out_lr, int frames) {
+    og_bus_t bus;
     float bl[OG_CTRL_RATE], br[OG_CTRL_RATE];
     int done = 0;
     while (done < frames) {
         int n = frames - done;
         if (n > OG_CTRL_RATE) n = OG_CTRL_RATE;
-        memset(bl, 0, sizeof(bl));
-        memset(br, 0, sizeof(br));
+        memset(&bus, 0, sizeof(bus));
         og__seq_advance(g, n);
+        advance_free_lfos(g, n);
 
         for (int i = 0; i < OG_VOICES; i++) {
             voice_t *v = &g->v[i];
@@ -529,7 +672,7 @@ void og_render_float(og_t *g, float *out_lr, int frames) {
                             v->pend_p, v->pend_lockmask, v->pend_slide);
                 if (!gate) og_note_off(g, v->track, v->note);
             }
-            if (v->active) voice_render(g, v, bl, br, n);
+            if (v->active) voice_render(g, v, &bus, n);
             if (!v->active && v->pending) {
                 int gate = v->pend_gate;
                 voice_start(g, v, v->pend_track, v->pend_note, v->pend_vel,
@@ -538,6 +681,7 @@ void og_render_float(og_t *g, float *out_lr, int frames) {
             }
         }
 
+        og__fx_process(g, &bus, bl, br, n);
         float m = g->master * 0.5f;   /* headroom for 12 voices */
         for (int s = 0; s < n; s++) {
             out_lr[2 * (done + s)]     = soft_clip(bl[s] * m);

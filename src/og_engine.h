@@ -55,8 +55,38 @@ enum {
     P_FREQ, P_RESO, P_FTYP, P_FENV, P_FATK, P_FDEC, P_FSUS, P_FREL,
     /* Page 3: Amp */
     P_AATK, P_ADEC, P_ASUS, P_AREL, P_DRIV, P_PAN, P_VOL, P_VELA,
+    /* Pages 4-6: LFO 1-3 (8 params each, same layout) */
+    P_L1DEST, P_L1WAVE, P_L1SYNC, P_L1RATE, P_L1DPTH, P_L1TRIG, P_L1PHAS, P_L1FADE,
+    P_L2DEST, P_L2WAVE, P_L2SYNC, P_L2RATE, P_L2DPTH, P_L2TRIG, P_L2PHAS, P_L2FADE,
+    P_L3DEST, P_L3WAVE, P_L3SYNC, P_L3RATE, P_L3DPTH, P_L3TRIG, P_L3PHAS, P_L3FADE,
+    /* Page 7: sends and MIDI out */
+    P_SDLY, P_SREV, P_SCHO, P_MCH, P_MOUT, P_RSV1, P_RSV2, P_RSV3,
     P_COUNT_USED
 };
+
+#define OG_LFOS          3
+#define OG_LFO_PARAMS    8
+#define P_LFO(i, k)      (P_L1DEST + (i) * OG_LFO_PARAMS + (k))
+enum { LFO_DEST = 0, LFO_WAVE, LFO_SYNC, LFO_RATE, LFO_DPTH, LFO_TRIG, LFO_PHAS, LFO_FADE };
+enum { OG_WAVE_SINE = 0, OG_WAVE_TRI, OG_WAVE_SQR, OG_WAVE_SAW, OG_WAVE_RAMP, OG_WAVE_RND, OG_WAVES };
+#define OG_LFO_SYNC_RATES 17
+/* LFO destinations: 0 off, 1 pitch, 2..33 = params 0..31, 34..36 = sends */
+#define OG_DEST_OFF      0
+#define OG_DEST_PITCH    1
+#define OG_DEST_PARAM0   2
+#define OG_DEST_SEND0    34
+#define OG_DESTS         37
+
+/* MIDI out modes for P_MOUT */
+enum { OG_MOUT_INT = 0, OG_MOUT_EXT, OG_MOUT_BOTH, OG_MOUTS };
+
+/* Global FX parameters (not per track, not lockable). Values 0..max. */
+enum {
+    FX_DTIM = 0, FX_DFB, FX_DPP, FX_DFLT, FX_RSIZ, FX_RDEC, FX_RPRE, FX_RDMP,
+    FX_CDEP, FX_CRAT, FX_CWID, FX_MTHR, FX_MRAT, FX_MGAIN, FX_MDRV, FX_MVOL,
+    FX_COUNT
+};
+#define OG_DELAY_TIMES   13
 
 #define OG_PAGES (P_COUNT_USED / OG_PAGE_PARAMS)
 
@@ -124,6 +154,20 @@ typedef struct { uint64_t t; int track, note, vel, on; } og_event_t;
 void  og_debug_log(og_t *g, int enable);           /* also clears the log */
 int   og_debug_events(const og_t *g, const og_event_t **out);
 int   og_debug_voice_param(const og_t *g, int track, int pid); /* newest voice, -1 none */
+
+/* Effects, solo, MIDI out. */
+void  og_set_fx(og_t *g, int id, int value);
+int   og_get_fx(const og_t *g, int id);
+int   og_fx_default(int id);
+int   og_fx_max(int id);
+void  og_set_solo(og_t *g, int track, int on);
+int   og_get_solo(const og_t *g, int track);
+/* Called from the audio thread with a 3-byte MIDI message for tracks whose
+ * MIDI channel (P_MCH) is set. Must not block. */
+typedef void (*og_midi_out_fn)(void *ctx, uint8_t status, uint8_t d1, uint8_t d2);
+void  og_set_midi_out(og_t *g, og_midi_out_fn fn, void *ctx);
+uint64_t og_lock_steps(const og_t *g, int track);  /* bit s = step s has a lock */
+float og_debug_comp_gain(const og_t *g);           /* master compressor gain */
 
 /* Introspection for UI / tests. */
 int   og_active_voices(const og_t *g);
