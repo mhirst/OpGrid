@@ -61,7 +61,7 @@ static const pinfo_t k_pinfo[P_COUNT_USED] = {
                  {64, 127}, {0, 1}, {0, 127}, {0, 127}
     /* LFO1-3 */ LFO_INFO, LFO_INFO, LFO_INFO,
 #undef LFO_INFO
-    /* SEND */ {0, 127}, {0, 127}, {0, 127}, {0, 16}, {0, OG_MOUTS - 1}, {0, 0}, {0, 0}, {0, 0},
+    /* SEND */ {0, 127}, {0, 127}, {0, 127}, {0, 16}, {0, OG_MOUTS - 1}, {0, OG_MACHINES - 1}, {0, 0}, {0, 0},
 };
 
 /* LFO sync rates: steps per cycle */
@@ -93,6 +93,8 @@ static inline float soft_clip(float x) {
 
 static float env_seconds(int v) { return 0.0005f * powf(20000.0f, (float)v / 127.0f); }
 
+float og__ratio(int idx) { return k_ratios[clampi(idx, 0, N_RATIOS - 1)]; }
+
 int og_param_default(int pid) {
     return (pid >= 0 && pid < P_COUNT_USED) ? k_pinfo[pid].def : 0;
 }
@@ -112,6 +114,8 @@ og_t *og_create(float sample_rate) {
 
     for (int i = 0; i <= SINE_SIZE; i++)
         g->sine[i] = sinf(2.0f * (float)M_PI * (float)i / (float)SINE_SIZE);
+
+    og__wavetables_init(g);
 
     for (int v = 0; v < 128; v++) {
         float ticks = env_seconds(v) * g->sr / (float)OG_CTRL_RATE;
@@ -166,7 +170,7 @@ static void midi_send(og_t *g, uint8_t st, uint8_t d1, uint8_t d2) {
 
 void og_set_param(og_t *g, int track, int pid, int value) {
     if (!g || track < 0 || track >= OG_TRACKS || pid < 0 || pid >= P_COUNT_USED) return;
-    value = clampi(value, 0, og_param_max(pid));
+    value = clampi(value, 0, og__pmax(g, track, pid));
     g->params[track][pid] = value;
     /* sounding voices follow base edits, except where a step lock holds */
     for (int i = 0; i < OG_VOICES; i++) {
@@ -239,6 +243,14 @@ static void voice_start(og_t *g, voice_t *v, int track, int note, int vel,
         v->ic1[0] = v->ic1[1] = v->ic2[0] = v->ic2[1] = 0.0f;
     }
     for (int k = 2; k <= 4; k++) v->mod_env[k] = 1.0f;
+    v->perc_swp = v->perc_fm = v->perc_nz = 1.0f;
+    v->perc_click = 1.0f;
+    if (fresh) {
+        v->perc_nlp = 0.0f;
+        memset(v->drift, 0, sizeof(v->drift));
+        for (int k = 0; k < OG_STACK_MAX; k++) v->stk[k] = (float)((k * 0x9E3779B9u) >> 8) / 16777216.0f;
+        v->nrng = 0x9E3779B9u ^ (uint32_t)(note * 2654435761u) ^ g->clock;
+    }
     v->lfo_age = 0.0f;
     for (int i = 0; i < OG_LFOS; i++) {
         v->lfo_ph[i] = (float)p[P_LFO(i, LFO_PHAS)] / 128.0f;
@@ -320,7 +332,7 @@ static uint64_t locked_params(const og_t *g, int track, const og_lock_t *locks,
     for (int i = 0; i < OG_LOCKS; i++) {
         const og_lock_t *l = &locks[i];
         if (l->used && l->step == step && l->pid < P_COUNT_USED) {
-            out[l->pid] = clampi(l->val, 0, og_param_max(l->pid));
+            out[l->pid] = clampi(l->val, 0, og__pmax(g, track, l->pid));
             mask |= 1ull << l->pid;
         }
     }
@@ -472,7 +484,7 @@ static float apply_lfos(og_t *g, voice_t *v, int *pm, int n) {
         if (dest == OG_DEST_PITCH) { pitch += amt * 12.0f; continue; }
         int pid = dest >= OG_DEST_SEND0 ? P_SDLY + (dest - OG_DEST_SEND0) : dest - OG_DEST_PARAM0;
         if (pid < 0 || pid >= P_COUNT_USED) continue;
-        int max = og_param_max(pid);
+        int max = og__pmax(g, v->track, pid);
         pm[pid] = clampi(pm[pid] + (int)lrintf(amt * (float)max), 0, max);
     }
     return pitch;
@@ -483,8 +495,10 @@ static void voice_render(og_t *g, voice_t *v, og_bus_t *bus, int n) {
     memcpy(pm, v->p, sizeof(pm));
     float lfo_pitch = apply_lfos(g, v, pm, n);
     const int *p = pm;
-    const int algo = p[P_ALGO];
+    const int machine = p[P_MACH];
+    const int algo = clampi(p[P_ALGO], 0, OG_ALGOS - 1);
     const float velf = (float)v->vel / 127.0f;
+    float osc[OG_CTRL_RATE];
 
     /* --- control-rate updates --- */
     if ((p[P_GLID] > 0 || v->slide) && v->pitch != v->target) {
@@ -496,13 +510,17 @@ static void voice_render(og_t *g, voice_t *v, og_bus_t *bus, int n) {
         v->pitch = v->target;
     }
     float base = midi_hz(v->pitch + lfo_pitch);
+    if (machine == OG_MACH_PERC) og__osc_perc(g, v, p, base, osc, n);
+    else if (machine == OG_MACH_MORPH) og__osc_morph(g, v, p, base, osc, n);
+    else if (machine == OG_MACH_STACK) og__osc_stack(g, v, p, base, osc, n);
+    else {
 
     float det = (float)p[P_DTUN] / 127.0f * 0.02f;  /* up to ~35 cents */
     float rat[5];
-    rat[1] = k_ratios[p[P_RAT1]];
-    rat[2] = k_ratios[p[P_RAT2]] * (1.0f + det);
-    rat[3] = k_ratios[p[P_RAT3]] * (1.0f - det);
-    rat[4] = k_ratios[p[P_RAT4]] * (1.0f + det * 0.5f);
+    rat[1] = og__ratio(p[P_RAT1]);
+    rat[2] = og__ratio(p[P_RAT2]) * (1.0f + det);
+    rat[3] = og__ratio(p[P_RAT3]) * (1.0f - det);
+    rat[4] = og__ratio(p[P_RAT4]) * (1.0f + det * 0.5f);
     uint32_t inc[5];
     for (int k = 1; k <= 4; k++) {
         float f = clampf(base * rat[k], 0.0f, g->sr * 0.49f);
@@ -515,6 +533,7 @@ static void voice_render(og_t *g, voice_t *v, og_bus_t *bus, int n) {
     for (int k = 2; k <= 4; k++) {
         int dec = p[P_DEC2 + (k - 2)];
         if (dec < 127) v->mod_env[k] *= g->dec_coef[dec];
+        if (v->mod_env[k] < 1e-6f) v->mod_env[k] = 0.0f;     /* no denormals */
         float l = (float)p[P_LVL2 + (k - 2)] / 127.0f;
         lvl[k] = l * l * 1.5f * v->mod_env[k] * velm;
     }
@@ -539,6 +558,22 @@ static void voice_render(og_t *g, voice_t *v, og_bus_t *bus, int n) {
     float c2 = (cm & 0x04) ? norm * (float)p[P_LVL2] / 127.0f : 0.0f;
     float c3 = (cm & 0x08) ? norm * (float)p[P_LVL3] / 127.0f : 0.0f;
     float c4 = (cm & 0x10) ? norm * (float)p[P_LVL4] / 127.0f : 0.0f;
+
+    const float *t = g->sine;
+    uint32_t ph1 = v->ph[1], ph2 = v->ph[2], ph3 = v->ph[3], ph4 = v->ph[4];
+    float fb1 = v->fb1, fb2 = v->fb2;
+    for (int s = 0; s < n; s++) {
+        float o4 = sine_lookup(t, ph4 + (uint32_t)(int64_t)((fb1 + fb2) * 0.5f * fbs));
+        fb2 = fb1; fb1 = o4;
+        float o3 = sine_lookup(t, ph3 + (uint32_t)(int64_t)(o4 * a43));
+        float o2 = sine_lookup(t, ph2 + (uint32_t)(int64_t)(o4 * a42 + o3 * a32));
+        float o1 = sine_lookup(t, ph1 + (uint32_t)(int64_t)(o4 * a41 + o3 * a31 + o2 * a21));
+        ph1 += inc[1]; ph2 += inc[2]; ph3 += inc[3]; ph4 += inc[4];
+        osc[s] = o1 * c1 + o2 * c2 + o3 * c3 + o4 * c4;
+    }
+    v->ph[1] = ph1; v->ph[2] = ph2; v->ph[3] = ph3; v->ph[4] = ph4;
+    v->fb1 = fb1; v->fb2 = fb2;
+    }   /* FM Poly */
 
     /* filter */
     float fenv = env_tick(g, &v->flt, p[P_FATK], p[P_FDEC], p[P_FSUS], p[P_FREL]);
@@ -569,20 +604,10 @@ static void voice_render(og_t *g, voice_t *v, og_bus_t *bus, int n) {
     float sd = (float)p[P_SDLY] / 127.0f, sr_ = (float)p[P_SREV] / 127.0f, sc = (float)p[P_SCHO] / 127.0f;
     sd *= sd; sr_ *= sr_; sc *= sc;
 
-    const float *t = g->sine;
-    uint32_t ph1 = v->ph[1], ph2 = v->ph[2], ph3 = v->ph[3], ph4 = v->ph[4];
-    float fb1 = v->fb1, fb2 = v->fb2;
     float i1a = v->ic1[0], i2a = v->ic2[0], i1b = v->ic1[1], i2b = v->ic2[1];
 
     for (int s = 0; s < n; s++) {
-        float o4 = sine_lookup(t, ph4 + (uint32_t)(int64_t)((fb1 + fb2) * 0.5f * fbs));
-        fb2 = fb1; fb1 = o4;
-        float o3 = sine_lookup(t, ph3 + (uint32_t)(int64_t)(o4 * a43));
-        float o2 = sine_lookup(t, ph2 + (uint32_t)(int64_t)(o4 * a42 + o3 * a32));
-        float o1 = sine_lookup(t, ph1 + (uint32_t)(int64_t)(o4 * a41 + o3 * a31 + o2 * a21));
-        ph1 += inc[1]; ph2 += inc[2]; ph3 += inc[3]; ph4 += inc[4];
-
-        float x = o1 * c1 + o2 * c2 + o3 * c3 + o4 * c4;
+        float x = osc[s];
 
         /* stage A */
         float v3 = x - i2a;
@@ -628,8 +653,6 @@ static void voice_render(og_t *g, voice_t *v, og_bus_t *bus, int n) {
         bus->cho_l[s] += yl * sc; bus->cho_r[s] += yr * sc;
     }
 
-    v->ph[1] = ph1; v->ph[2] = ph2; v->ph[3] = ph3; v->ph[4] = ph4;
-    v->fb1 = fb1; v->fb2 = fb2;
     v->ic1[0] = i1a; v->ic2[0] = i2a; v->ic1[1] = i1b; v->ic2[1] = i2b;
     v->amp_out = amp;
 

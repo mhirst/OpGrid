@@ -39,7 +39,7 @@ fs.writeFileSync(path.join(tmp, 'ui.mjs'), src);
 
 /* ---- fake DSP implementing the param protocol (see src/og_plugin.c) ---- */
 const dsp = {
-    params: Array.from({ length: 16 }, (_, t) => Array.from({ length: 64 }, (_, i) => t === 0 ? i % 30 : 10)),
+    params: Array.from({ length: 16 }, (_, t) => Array.from({ length: 64 }, (_, i) => i === 61 ? 0 : t === 0 ? i % 30 : 10)),
     steps: Array.from({ length: 16 }, () => Array.from({ length: 64 }, () => [0, 60, 0, 0, 0, 100, 4, 1, 0, 0])),
     locks: Array.from({ length: 16 }, () => new Map()),       /* "s:p" -> v */
     clip: Array.from({ length: 16 }, () => [16, 4, 50, 0]),
@@ -201,6 +201,18 @@ fxDump.forEach((line, i) => {
     check(ui.FX[i][2] === def && ui.FX[i][1] === max, `fx ${i}: C ${def}/${max} JS ${ui.FX[i][2]}/${ui.FX[i][1]}`);
     for (const v of [0, Math.floor(max / 2), max]) check(typeof ui.FX[i][3](v) === 'string' && ui.FX[i][3](v).length <= 5, `fx fmt ${i} -> ${ui.FX[i][3](v)}`);
 });
+/* machine tables match og_machines.c */
+const mdump = execFileSync(path.join(root, 'build/machines_test'), ['--dump-machines']).toString().trim().split('\n');
+for (const line of mdump) {
+    const [m, pid, def, max] = line.split(' ').map(Number);
+    if (m === 0) continue;
+    const e = ui.MACH_PARAMS[m][pid];
+    check(e[2] === max && e[3] === def, `machine ${m} pid ${pid}: C ${def}/${max} JS ${e[3]}/${e[2]}`);
+    for (const v of [0, Math.floor(max / 2), max]) {
+        const t = e[4](v);
+        check(typeof t === 'string' && t.length <= 5, `machine ${m} pid ${pid} formats ${v} as "${t}"`);
+    }
+}
 /* every param formatter fits a 5-char cell, with sync on and off */
 ui.PARAMS.forEach((p, i) => {
     for (const v of [0, Math.floor(p[2] / 2), p[2]]) for (const sync of [0, 1]) {
@@ -490,6 +502,39 @@ midi(0xB0, 85, 127); midi(0xB0, 85, 127); dsp.play = 0;
 midi(0xB0, 49, 127); midi(0xB0, 58, 127); midi(0xB0, 49, 0);
 check(!ui.state().songView && logHas('song', 0), 'Shift+Loop leaves song mode');
 
+/* machines: Shift + jog switches the track's machine */
+jogTo(0);
+sets.length = 0;
+midi(0xB0, 49, 127); midi(0xB0, 14, 1); midi(0xB0, 49, 0);
+check(lastSet('mach')?.[1] === `${ui.state().track} 1`, `Shift+jog selects FM Perc: ${JSON.stringify(lastSet('mach'))}`);
+dsp.params[ui.state().track][61] = 0;                        /* fake DSP: back to FM Poly */
+
+/* sound library: starter sounds from the module dir, user sounds saved per track */
+globalThis.__files.set('/data/UserData/schwung/modules/overtake/opgrid/sounds.json',
+    fs.readFileSync(path.join(root, 'module/sounds.json'), 'utf8'));
+midi(0xB0, 50, 127);                                          /* Menu */
+check(ui.state().menuItems[0].startsWith('SOUNDS'), `menu starts with SOUNDS: ${ui.state().menuItems[0]}`);
+midi(0xB0, 3, 127);                                           /* open sounds */
+const items = ui.state().menuItems;
+check(items[0] === '< BACK' && items[1].startsWith('SAVE T') && items.includes('KICK DEEP') && items.length >= 34,
+      `sound list: ${items.slice(0, 5)} ... (${items.length})`);
+check(ui.state().menuItems[0] === '< BACK', 'sound list');
+sets.length = 0;
+midi(0xB0, 3, 127);                                           /* cursor starts on the first starter sound */
+const tp = lastSet('tpset');
+check(tp && tp[1].split(' ')[1].split(',').length === 64 && tp[1].split(' ')[1].split(',')[61] === '1',
+      `loading KICK DEEP sends all params with machine FM Perc: ${tp && tp[1].slice(0, 30)}`);
+check(ui.state().menuOpen, 'sound list stays open to audition the next one');
+midi(0xB0, 14, 127);                                          /* up to SAVE */
+midi(0xB0, 3, 127);
+check([...globalThis.__files.keys()].some(k => k.startsWith('/data/UserData/schwung/opgrid/sounds/SOUND 01')), 'track sound saved');
+check(!ui.state().menuOpen, 'saving a sound closes the menu');
+midi(0xB0, 50, 127);                                          /* reopen: user sound listed with a star */
+midi(0xB0, 3, 127);
+check(ui.state().menuItems.includes('* SOUND 01'), 'user sound listed');
+midi(0xB0, 50, 127);
+check(!ui.state().menuOpen, 'Menu closes');
+
 /* regression: FILTER page knob 1 (cutoff, 0-127) must use acceleration */
 jogTo(2);
 const before = dsp.params[ui.state().track][16];
@@ -500,7 +545,8 @@ check(dsp.params[ui.state().track][16] === Math.min(127, before + 5), `cutoff kn
 dsp.params[3][16] = 77; dsp.fx[4] = 55; dsp.tempo = 101; dsp.clips[3][2] = 1;
 dsp.cdumps.set('3:2', 'deadbeef00');
 midi(0xB0, 50, 127);
-check(ui.state().menuOpen && ui.state().menuItems[0].startsWith('SAVE'), `menu opens: ${ui.state().menuItems}`);
+check(ui.state().menuOpen && ui.state().menuItems[1].startsWith('SAVE'), `menu opens: ${ui.state().menuItems}`);
+midi(0xB0, 14, 1);
 midi(0xB0, 3, 127);                                          /* SAVE */
 check(!ui.state().menuOpen && ui.state().job, 'save runs as a job');
 ticks(200);
@@ -516,15 +562,15 @@ check(!ui.state().projectDirty, 'save clears the dirty flag');
 
 /* change things, then load the project back */
 midi(0xB0, 50, 127);
-midi(0xB0, 14, 1); midi(0xB0, 14, 1);                       /* NEW PROJECT */
-check(ui.state().menuItems[2] === 'NEW PROJECT', 'menu has NEW PROJECT');
+midi(0xB0, 14, 1); midi(0xB0, 14, 1); midi(0xB0, 14, 1);    /* NEW PROJECT */
+check(ui.state().menuItems[3] === 'NEW PROJECT', `menu has NEW PROJECT: ${ui.state().menuItems}`);
 midi(0xB0, 3, 127);
 check(ui.state().menuOpen, 'destructive items need a second click');
 midi(0xB0, 3, 127);
 check(logHas('reset') && dsp.params[3][16] === 0, 'new project resets');
 midi(0xB0, 50, 127);
-midi(0xB0, 14, 1); midi(0xB0, 14, 1); midi(0xB0, 14, 1);    /* first LOAD entry */
-check(ui.state().menuItems[3]?.startsWith('LOAD '), `load entry listed: ${ui.state().menuItems[3]}`);
+midi(0xB0, 14, 1); midi(0xB0, 14, 1); midi(0xB0, 14, 1); midi(0xB0, 14, 1);   /* first LOAD entry */
+check(ui.state().menuItems[4]?.startsWith('LOAD '), `load entry listed: ${ui.state().menuItems[4]}`);
 midi(0xB0, 3, 127); midi(0xB0, 3, 127);
 ticks(200);
 check(dsp.params[3][16] === 77 && dsp.fx[4] === 55 && dsp.tempo === 101, `load restores params/fx/tempo: ${dsp.params[3][16]} ${dsp.fx[4]} ${dsp.tempo}`);
@@ -548,7 +594,7 @@ ticks(200);
 check(logHas('reset'), 'init loads the autosave');
 
 /* shift + pad selects track and pulls its data */
-dsp.params[4] = new Array(64).fill(10);
+dsp.params[4] = new Array(64).fill(10); dsp.params[4][61] = 0;
 midi(0xB0, 49, 127); midi(0x90, 72, 100); midi(0xB0, 49, 0);
 check(ui.state().track === 4, `track select: ${ui.state().track}`);
 check(ui.values[4][5] === 10 && ui.values[4][0] === 7, `pulled (and clamped) track 4 params: ${ui.values[4][5]} ${ui.values[4][0]}`);

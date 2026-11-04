@@ -1,18 +1,29 @@
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Wpedantic -Iinclude -Isrc
-SRC = src/og_engine.c src/og_seq.c src/og_fx.c src/og_rec.c src/og_song.c src/og_plugin.c
+SRC = src/og_engine.c src/og_machines.c src/og_seq.c src/og_fx.c src/og_rec.c src/og_song.c src/og_plugin.c
 
 .PHONY: test test-c test-ui sanitize arm clean screens
 
 test: test-c test-ui
 
-test-c: build/engine_test build/seq_test build/fx_test build/clip_test build/rec_test build/song_test
+test-c: build/engine_test build/seq_test build/fx_test build/clip_test build/rec_test build/song_test build/machines_test build/sounds_test
 	./build/engine_test build/demo.wav
 	./build/seq_test build/seq_demo.wav
 	./build/fx_test
 	./build/clip_test
 	./build/rec_test
 	./build/song_test
+	./build/machines_test build/machines_demo.wav
+	node tools/make_sounds.mjs
+	./build/sounds_test build/sounds.txt
+
+build/sounds_test: $(SRC) src/og_engine.h test/sounds_test.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SRC) test/sounds_test.c -o $@ -lm
+
+build/machines_test: $(SRC) src/og_engine.h src/og_internal.h test/machines_test.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SRC) test/machines_test.c -o $@ -lm
 
 build/song_test: $(SRC) src/og_engine.h src/og_internal.h test/song_test.c
 	@mkdir -p build
@@ -58,9 +69,15 @@ sanitize:
 	$(CC) -O1 -g -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer \
 		$(SRC) test/song_test.c -o build/song_test_san -lm
 	./build/song_test_san
+	$(CC) -O1 -g -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer \
+		$(SRC) test/machines_test.c -o build/machines_test_san -lm
+	./build/machines_test_san
 
-test-ui: build/bridge
+test-ui: build/bridge build/machines_test
 	node test/ui_test.mjs
+	node test/help_test.mjs
+	node tools/make_sounds.mjs
+	timeout 120 node test/e2e_test.mjs
 
 build/bridge: $(SRC) tools/bridge.c
 	@mkdir -p build

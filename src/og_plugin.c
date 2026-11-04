@@ -50,6 +50,7 @@
  *   set "rp" "<t> <pid> <v>"  knob move: a lock while recording, else the base value
  *   set "rnew" "<t> <c>"  "rclose" "<t>"   record a new clip / fix its length
  *   set "tpset" "<t> <v0>,<v1>,..."     all of a track's params at once (loading)
+ *   set "mach"  "<t> <machine>"        switch machine (resets its first 12 params)
  *   set "undo"  "reset"
  *   set "cload" "<t> <c> <hex>"            restore a clip from og_clip_dump text
  *   get "rec"        "armed,counting_in,growing_track,quant,mode,click"
@@ -196,7 +197,11 @@ static void plug_set(void *inst, const char *key, const char *val) {
     } else if (!strcmp(key, "tpset")) {
         int v[1 + P_COUNT_USED];
         int n = parse_ints(val, v, 1 + P_COUNT_USED);
+        /* the machine first: it decides the ranges of ids 0..11 */
+        if (n > 1 + P_MACH) og_set_param(g, v[0], P_MACH, v[1 + P_MACH]);
         for (int p = 0; p + 1 < n; p++) og_set_param(g, v[0], p, v[p + 1]);
+    } else if (!strcmp(key, "mach")) {
+        if (parse_ints(val, a, 2) == 2) og_set_machine(g, a[0], a[1]);
     } else if (!strcmp(key, "undo")) {
         og_undo(g);
     } else if (!strcmp(key, "reset")) {

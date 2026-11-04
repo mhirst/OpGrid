@@ -176,7 +176,7 @@ void og_step_clear(og_t *g, int track, int step) {
 int og_lock_set(og_t *g, int track, int step, int pid, int value) {
     if (!g || !track_ok(track) || !step_ok(step) || pid < 0 || pid >= P_COUNT_USED) return 0;
     og_clip_t *c = cur_clip(g, track);
-    value = clampi(value, 0, og_param_max(pid));
+    value = clampi(value, 0, og__pmax(g, track, pid));
     og_lock_t *free_slot = NULL;
     for (int i = 0; i < OG_LOCKS; i++) {
         og_lock_t *l = &c->locks[i];

@@ -10,6 +10,11 @@
 
 #define SINE_BITS   12
 #define SINE_SIZE   (1 << SINE_BITS)
+#define OG_WT_BITS   11
+#define OG_WT_SIZE   (1 << OG_WT_BITS)
+#define OG_WT_LEVELS 6               /* 32, 16, 8, 4, 2, 1 harmonics */
+#define OG_WAVES_N   8
+#define OG_STACK_MAX 8
 
 enum { ENV_IDLE = 0, ENV_ATT, ENV_DEC, ENV_SUS, ENV_REL };
 
@@ -36,6 +41,12 @@ typedef struct {
     float    mod_env[5];
     float    amp_out;
     float    ic1[2], ic2[2];
+
+    /* machine oscillator state */
+    float    perc_swp, perc_fm, perc_nz, perc_click, perc_nlp;
+    uint32_t nrng;
+    float    drift[OG_STACK_MAX];
+    float    stk[OG_STACK_MAX];
 
     /* LFOs */
     float    lfo_ph[OG_LFOS];       /* own phase (retrig mode) 0..1 */
@@ -182,6 +193,7 @@ struct og {
     og_event_t log[OG_LOG_MAX];
 
     float    sine[SINE_SIZE + 1];
+    float    wt[OG_WAVES_N][OG_WT_LEVELS][OG_WT_SIZE + 1];
     float    att_inc[128];
     float    dec_coef[128];
     float    pan_l[128], pan_r[128];
@@ -192,6 +204,12 @@ void og__note_on_locked(og_t *g, int track, int note, int vel,
                         const og_lock_t *locks, int step, int slide);
 void og__apply_locks_to_track(og_t *g, int track, const og_lock_t *locks, int step);
 void og__seq_init(og_t *g);
+void og__wavetables_init(og_t *g);
+int  og__pmax(const og_t *g, int track, int pid);
+float og__ratio(int idx);
+void og__osc_perc(og_t *g, voice_t *v, const int *p, float base, float *osc, int n);
+void og__osc_morph(og_t *g, voice_t *v, const int *p, float base, float *osc, int n);
+void og__osc_stack(og_t *g, voice_t *v, const int *p, float base, float *osc, int n);
 void og__rec_init(og_t *g);
 int  og__countin_advance(og_t *g, int frames, double step_samples); /* 1 = still counting */
 void og__rec_cross(og_t *g, int track, double start, double end);   /* replace-mode clearing */

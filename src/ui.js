@@ -57,6 +57,12 @@ const DEST_NAMES = ['OFF', 'PTCH',
     'AATK', 'ADEC', 'ASUS', 'AREL', 'DRIV', 'PAN', 'VOL', 'VELA',
     'SDLY', 'SREV', 'SCHO'];
 const WAVES = ['SIN', 'TRI', 'SQR', 'SAW', 'RAMP', 'RND'];
+/* destinations 2..13 are the machine's own params: name them per machine */
+function destName(v, vals) {
+    const m = vals ? (vals[61] | 0) : 0;
+    if (m > 0 && v >= 2 && v < 14) return (MACH_PARAMS[m][v - 2][0] || '-');
+    return DEST_NAMES[v];
+}
 const SYNC_RATES = ['8BAR', '6BAR', '4BAR', '3BAR', '2BAR', '6/4', '1BAR', '3/4', '1/2', '3/8',
     '1/4', '3/16', '1/8', '3/32', '1/16', '1/32', '1/64'];
 const lfoHz = v => 0.05 * Math.pow(2, v / 127 * 10);
@@ -66,7 +72,7 @@ const lfoRate = i => (v, vals) => vals && vals[32 + 8 * (i - 1) + 2]
     ? SYNC_RATES[Math.floor(v * SYNC_RATES.length / 128)] : hz(lfoHz(v));
 function lfoParams(i) {
     return [
-        ['DEST', `LFO ${i} destination`, DEST_NAMES.length - 1, 0, v => DEST_NAMES[v]],
+        ['DEST', `LFO ${i} destination`, DEST_NAMES.length - 1, 0, (v, vals) => destName(v, vals)],
         ['WAVE', `LFO ${i} wave`, WAVES.length - 1, 0, v => WAVES[v]],
         ['SYNC', `LFO ${i} sync`, 1, 1, v => v ? 'SYNC' : 'FREE'],
         ['RATE', `LFO ${i} rate`, 127, 64, lfoRate(i)],
@@ -103,9 +109,41 @@ const PARAMS = [
     ['DLY', 'Delay send', 127, 0, num], ['REV', 'Reverb send', 127, 0, num],
     ['CHO', 'Chorus send', 127, 0, num], ['MCH', 'MIDI channel', 16, 0, v => v ? `CH${v}` : 'OFF'],
     ['MODE', 'MIDI mode', 2, 0, v => ['INT', 'EXT', 'BOTH'][v]],
-    ['', '', 0, 0, () => ''], ['', '', 0, 0, () => ''], ['', '', 0, 0, () => ''],
+    ['', 'Machine', 3, 0, v => ['POLY', 'PERC', 'MORPH', 'STACK'][v]], ['', '', 0, 0, () => ''], ['', '', 0, 0, () => ''],
 ];
 const NPARAMS = PARAMS.length;
+
+/* ---------- machines (ids 0..11 differ per machine; must match og_machines.c) ---------- */
+const MACHINES = ['FM POLY', 'FM PERC', 'MORPH', 'STACK'];
+const P_MACH = 61;
+const MACH_PAGES = [['FM', 'FM 2'], ['PERC', 'PERC2'], ['MORPH', 'MORPH2'], ['STACK', 'STACK2']];
+const MWAVES = ['SIN', 'TRI', 'SAW', 'SQR', 'PLS', 'ORGN', 'VOX', 'GLAS'];
+const none = ['', '', 0, 0, () => ''];
+const MACH_PARAMS = [
+    null,                                                   /* FM Poly: PARAMS 0..11 */
+    [   ['SWP', 'Pitch sweep', 127, 40, num], ['SWPT', 'Sweep time', 127, 55, num],
+        ['RAT', 'Mod ratio', 21, 3, ratio], ['FM', 'FM amount', 127, 30, num],
+        ['FMD', 'FM decay', 127, 50, num], ['NOIS', 'Noise level', 127, 0, num],
+        ['NDEC', 'Noise decay', 127, 55, num], ['COLR', 'Noise colour', 127, 64, signed(64)],
+        ['FDBK', 'Feedback', 127, 0, num], ['CLIK', 'Click', 127, 0, num], none, none ],
+    [   ['WAVA', 'Wave A', 127, 0, v => MWAVES[Math.round(v / 127 * 7)]],
+        ['WAVB', 'Wave B', 127, 36, v => MWAVES[Math.round(v / 127 * 7)]],
+        ['MIX', 'A/B mix', 127, 0, num], ['PD', 'Phase distortion', 127, 0, num],
+        ['TUNB', 'Wave B tune', 127, 64, v => { const d = Math.round((v - 64) / 63 * 24); return d > 0 ? `+${d}` : `${d}`; }],
+        ['RING', 'Ring mod', 127, 0, num], ['NOIS', 'Noise', 127, 0, num], ['DRFT', 'Drift', 127, 0, num],
+        ['SUBL', 'Sub level', 127, 0, num], ['SUBO', 'Sub octave', 1, 0, v => v ? '-2' : '-1'], none, none ],
+    [   ['WAVE', 'Wave', 3, 0, v => ['SAW', 'SQR', 'TRI', 'SIN'][v]], ['VOIC', 'Voices', 7, 5, v => `${v + 1}`],
+        ['DTUN', 'Detune', 127, 40, num], ['ANIM', 'Animation', 127, 30, num],
+        ['SUBL', 'Sub level', 127, 0, num], ['SUBO', 'Sub octave', 1, 0, v => v ? '-2' : '-1'],
+        ['NOIS', 'Noise', 127, 0, num], ['MIX', 'Side level', 127, 100, num], none, none, none, none ],
+];
+const machineOf = t => clamp(values[t][P_MACH] | 0, 0, MACHINES.length - 1);
+/* the table entry for a param on a track (machine-aware) */
+function pdef(t, pid) {
+    const m = machineOf(t);
+    return m && pid < 12 ? MACH_PARAMS[m][pid] : PARAMS[pid];
+}
+const pageName = p => p < 2 ? MACH_PAGES[machineOf(track)][p] : PAGES[p];
 const SOUND_PAGES = NPARAMS / 8;            /* FM, FM 2, FILTER, AMP, LFO 1-3, SEND */
 const PAGES = ['FM', 'FM 2', 'FILTER', 'AMP', 'LFO 1', 'LFO 2', 'LFO 3', 'SEND', 'STEP', 'CLIP', 'FX 1', 'FX 2'];
 const PAGE_STEP = 8, PAGE_CLIP = 9, PAGE_FX1 = 10, PAGE_FX2 = 11;
@@ -217,7 +255,8 @@ function pullTrack(t) {
     if (s) {
         const parts = ints(s);
         for (let i = 0; i < NPARAMS && i < parts.length; i++)
-            if (Number.isFinite(parts[i])) values[t][i] = clamp(parts[i], 0, PARAMS[i][2]);
+            if (Number.isFinite(parts[i])) values[t][i] = parts[i];
+        for (let i = 0; i < NPARAMS; i++) values[t][i] = clamp(values[t][i] | 0, 0, pdef(t, i)[2]);
     }
     pullClip(t);
     pullSteps(t);
@@ -322,7 +361,8 @@ function firstHeld() {
 function editSound(knob, delta) {
     const pid = page * 8 + knob;
     if (pid >= NPARAMS) return;
-    const max = PARAMS[pid][2];
+    const max = pdef(track, pid)[2];
+    if (max === 0) return;
     touch(knob);
     if (held.size) {
         /* lock the parameter on every held step */
@@ -599,7 +639,7 @@ globalThis.onMidiMessageInternal = function (data) {
         let small;
         if (songView) small = knob !== 3;
         else if (mixer) small = false;
-        else if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && PARAMS[pid][2] < 40; }
+        else if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && pdef(track, pid)[2] < 40; }
         else if (page === PAGE_STEP) small = knob !== 1 && knob !== 2;
         else if (page === PAGE_CLIP) small = knob === 1 || knob >= 4;
         else small = FX[(page === PAGE_FX2 ? 8 : 0) + knob][1] < 40;
@@ -682,6 +722,7 @@ globalThis.onMidiMessageInternal = function (data) {
         if (!dl) break;
         if (menuOpen) menuMove(dl);
         else if (songView) { songSel = clamp(songSel + dl, 0, songRows.length); dirty = true; }
+        else if (shift && !mixer && !clipMode) changeMachine(dl);
         else changePage(dl);
         break;
     }
@@ -711,6 +752,15 @@ function updateFill() {
     const f = shift && muteHeld;
     if (f) muteUsed = true;
     if (f !== fillOn) { fillOn = f; setParam('fill', f ? 1 : 0); }
+}
+
+function changeMachine(d) {
+    const m = clamp(machineOf(track) + d, 0, MACHINES.length - 1);
+    if (m === machineOf(track)) return;
+    setParam('mach', `${track} ${m}`);
+    pullTrack(track);
+    if (page > 1) page = 0;            /* show the new machine's page */
+    showFlash(`T${track + 1}: ${MACHINES[m]}`);
 }
 
 function changePage(d) {
@@ -831,7 +881,7 @@ function drawHeader() {
     if (mixer) left = `TRACKS ${mixBank * 8 + 1}-${mixBank * 8 + 8}`;
     print(2, 1, left, 0);
     const tag = countingIn ? 'CNT' : recArmed ? 'REC' : playing ? '>' : '.';
-    const right = `${tag} ${mixer ? 'MIX' : (page === PAGE_FX1 || page === PAGE_FX2) ? '' : PAGES[page]}`;
+    const right = `${tag} ${mixer ? 'MIX' : (page === PAGE_FX1 || page === PAGE_FX2) ? '' : pageName(page)}`;
     print(126 - text_width(right), 1, right, 0);
 }
 
@@ -857,13 +907,13 @@ function drawBody(hs, hot) {
     if (page < SOUND_PAGES) {
         for (let k = 0; k < 8; k++) {
             const pid = page * 8 + k;
-            const [name, , max, , fmt] = PARAMS[pid];
+            const [name, , max, , fmt] = pdef(track, pid);
             if (!name) continue;
             const locked = hs && hs[1].locks.has(pid);
             const v = clamp(locked ? hs[1].locks.get(pid) : values[track][pid] | 0, 0, max);
             drawCell(k, name, fmt(v, values[track]), v / max, hot(k), locked);
         }
-        if (hot(0) && page === 0) {
+        if (hot(0) && page === 0 && machineOf(track) === 0) {
             /* routing takes over the lower half while the algorithm knob moves */
             fill_rect(0, 37, 128, 27, 0);
             draw_rect(0, 38, 128, 26, 1);
@@ -1111,16 +1161,19 @@ function pullRec() {
 
 /* ---------- projects (save / load / autosave) ---------- */
 const ROOT_DIR = '/data/UserData/schwung/opgrid';
+const SOUND_DIR = `${ROOT_DIR}/sounds`;
+const STARTER_SOUNDS = '/data/UserData/schwung/modules/overtake/opgrid/sounds.json';
+const P_MCH = 59, P_MOUT = 60;           /* MIDI routing is not part of a sound */
 const PROJECT_DIR = `${ROOT_DIR}/projects`;
 const AUTOSAVE = `${ROOT_DIR}/autosave.json`;
 const AUTOSAVE_TICKS = 344 * 120;               /* ~2 minutes of ticks */
 let projectName = 'PROJECT 01';
-let menuOpen = false, menuIndex = 0, menuItems = [], confirmIndex = -1;
+let menuOpen = false, menuIndex = 0, menuItems = [], confirmIndex = -1, menuMode = 'main';
 let job = null;                                 /* incremental save/load in progress */
 let lastAutosave = 0;
 
 function ensureDirs() {
-    for (const d of [ROOT_DIR, PROJECT_DIR]) { try { os.mkdir(d); } catch (e) { /* exists */ } }
+    for (const d of [ROOT_DIR, PROJECT_DIR, SOUND_DIR]) { try { os.mkdir(d); } catch (e) { /* exists */ } }
 }
 
 function listProjects() {
@@ -1256,8 +1309,60 @@ function nextProjectName() {
     return `PROJECT ${tickCount}`;
 }
 
+/* ---------- sound library ---------- */
+function starterSounds() {
+    try {
+        const d = JSON.parse(typeof host_read_file === 'function' ? (host_read_file(STARTER_SOUNDS) || 'null') : 'null');
+        return d && Array.isArray(d.sounds) ? d.sounds : [];
+    } catch (e) { return []; }
+}
+
+function userSounds() {
+    let r;
+    try { r = os.readdir(SOUND_DIR); } catch (e) { return []; }
+    const names = Array.isArray(r) && Array.isArray(r[0]) ? r[0] : [];
+    const out = [];
+    for (const n of names.filter(x => typeof x === 'string' && /\.json$/i.test(x)).sort()) {
+        try {
+            const d = JSON.parse(host_read_file(`${SOUND_DIR}/${n}`) || 'null');
+            if (d && Array.isArray(d.params)) out.push({ name: String(d.name || n.replace(/\.json$/i, '')), params: d.params });
+        } catch (e) { /* skip unreadable */ }
+    }
+    return out;
+}
+
+function loadSound(snd) {
+    const cur = ints(getParam(`tp:${track}`));
+    const p = snd.params.slice(0, NPARAMS).map((v, i) => (i === P_MCH || i === P_MOUT) && Number.isFinite(cur[i]) ? cur[i] : v);
+    if (p.length !== NPARAMS || !p.every(Number.isFinite)) { showFlash('BAD SOUND FILE'); return; }
+    setParam('tpset', `${track} ${p.join(',')}`);
+    pullTrack(track);
+    showFlash(`T${track + 1}: ${snd.name}`);
+}
+
+function saveSound() {
+    const used = new Set(userSounds().map(x => x.name));
+    let name = '';
+    for (let i = 1; i < 1000 && !name; i++) { const n = `SOUND ${String(i).padStart(2, '0')}`; if (!used.has(n)) name = n; }
+    const params = ints(getParam(`tp:${track}`));
+    ensureDirs();
+    const ok = writeAtomic(`${SOUND_DIR}/${name}.json`, JSON.stringify({ app: 'opgrid-sound', format: 1, name, params }));
+    showFlash(ok ? `SAVED ${name}` : 'SAVE FAILED');
+}
+
 function buildMenu() {
+    if (menuMode === 'sounds') {
+        menuItems = [
+            { label: '< BACK', act: () => { menuMode = 'main'; menuOpen = true; buildMenu(); } },
+            { label: `SAVE T${track + 1} SOUND`, act: saveSound },
+            ...starterSounds().map(x => ({ label: x.name, keep: true, act: () => loadSound(x) })),
+            ...userSounds().map(x => ({ label: `* ${x.name}`, keep: true, act: () => loadSound(x) })),
+        ];
+        menuIndex = clamp(menuIndex, 0, menuItems.length - 1);
+        return;
+    }
     menuItems = [
+        { label: `SOUNDS (T${track + 1})`, act: () => { menuMode = 'sounds'; menuIndex = 2; menuOpen = true; buildMenu(); } },
         { label: `SAVE ${projectName}`, act: () => startSave(`${PROJECT_DIR}/${projectName}.json`, projectName) },
         { label: 'SAVE AS NEW', act: () => { projectName = nextProjectName(); startSave(`${PROJECT_DIR}/${projectName}.json`, projectName); } },
         { label: 'NEW PROJECT', confirm: true, act: () => { setParam('reset', 1); projectName = nextProjectName(); afterReset(); showFlash('NEW PROJECT'); } },
@@ -1276,6 +1381,8 @@ function afterReset() {
 function toggleMenu() {
     menuOpen = !menuOpen;
     confirmIndex = -1;
+    menuMode = 'main';
+    menuIndex = 0;
     if (menuOpen) { ensureDirs(); buildMenu(); }
     dirty = true;
 }
@@ -1284,7 +1391,7 @@ function menuSelect() {
     const item = menuItems[menuIndex];
     if (!item) return;
     if (item.confirm && confirmIndex !== menuIndex) { confirmIndex = menuIndex; dirty = true; return; }
-    menuOpen = false;
+    if (!item.keep) menuOpen = false;           /* sounds stay open: audition one after another */
     confirmIndex = -1;
     item.act();
     dirty = true;
@@ -1292,7 +1399,7 @@ function menuSelect() {
 
 function drawMenu() {
     fill_rect(0, 0, 128, 10, 1);
-    print(2, 1, job ? (job.kind === 'save' ? 'SAVING' : 'LOADING') : 'PROJECT', 0);
+    print(2, 1, job ? (job.kind === 'save' ? 'SAVING' : 'LOADING') : menuMode === 'sounds' ? `SOUNDS > T${track + 1}` : 'PROJECT', 0);
     if (job) {
         const pct = Math.round(100 * (1 - job.tasks.length / job.total));
         draw_rect(4, 30, 120, 8, 1);
@@ -1373,7 +1480,7 @@ globalThis.tick = function () {
 
 /* exported for tests */
 globalThis.__opgrid = {
-    PARAMS, PAGES, CONDS, LENS, SPEEDS, FX, DEST_NAMES, WAVES, SYNC_RATES, fxValues, solo,
+    PARAMS, MACH_PARAMS, MACHINES, PAGES, CONDS, LENS, SPEEDS, FX, DEST_NAMES, WAVES, SYNC_RATES, fxValues, solo,
     values, stepFlags, clipInfo, held,
     clipStates, editClips, LAUNCH_QS,
     state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync, mixer, mixBank,

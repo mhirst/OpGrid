@@ -1,20 +1,27 @@
 # OpGrid
 
-A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module.
+A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module: four synth machines, a step sequencer with per-step locks and conditions, clip launching, live recording, song mode, effects, and a starter sound library.
 
-**Status: milestone 7 of 8** — FM Poly engine, 12-voice pool, 16-track step sequencer (step locks, conditions, micro-timing, ratchets, chords, swing), 3 LFOs per track, shared delay/reverb/chorus, master compressor, mixer, MIDI out, 8 clips per track with a launch grid and scenes, live recording with undo, project save/load with autosave, and song mode with performance capture. Remaining: more machines (FM Perc, Morph, Stack) and polish.
+**Status: 0.9.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
 
-## Build and install
+| | | |
+|---|---|---|
+| ![FM page](docs/screens/1-fm-page.png) | ![Step locks](docs/screens/2-step-lock.png) | ![Clip grid](docs/screens/5-clip-grid.png) |
+| ![Song view](docs/screens/7-song.png) | ![Mixer](docs/screens/6-mixer.png) | ![FM Perc](docs/screens/10-perc-page.png) |
+
+Screens are rendered by `make screens`: the real UI code driving the real engine, drawn with Schwung's 5x7 font and the Move's LED palette.
+
+## Install
 
 ```bash
-make test               # engine, sequencer and UI tests; writes build/demo.wav and build/seq_demo.wav
+make test               # all tests; also writes demo WAVs to build/
 ./scripts/build.sh      # cross-compile for the Move -> build/opgrid-module.tar.gz
 MOVE_HOST=ableton@move.local ./scripts/install.sh
 ```
 
-Requires Schwung installed on the Move.
+Requires Schwung on the Move. Then open OpGrid from Schwung's overtake modules. On-device help: Schwung's Help viewer, under Modules.
 
-## Controls (current)
+## Controls
 
 | Control | Action |
 |---|---|
@@ -38,7 +45,8 @@ Requires Schwung installed on the Move.
 | Mute (tap) | Mixer mode on / off |
 | Shift + Mute (hold) | Fill mode |
 | Knobs 1–8 | Edit the page's 8 values (Shift = fine) |
-| Jog wheel / Left / Right | Change page: FM, FM 2, FILTER, AMP, LFO 1–3, SEND, STEP, CLIP, FX 1, FX 2 |
+| Jog wheel / Left / Right | Change page: machine (2 pages), FILTER, AMP, LFO 1–3, SEND, STEP, CLIP, FX 1, FX 2 |
+| Shift + jog | Change the track's machine (on a sound page) |
 | Up / Down | Octave |
 | Back | Leave; music keeps playing. Shift + Vol touch + Jog click exits fully |
 
@@ -89,7 +97,11 @@ While the song plays, the clip grid shows what is playing but does not launch; S
 
 ### Projects
 
-**Menu** opens: SAVE (current name), SAVE AS NEW, NEW PROJECT, and LOAD for each saved project. NEW and LOAD ask for a second click. Projects (including songs) are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`, and reopens from it next time.
+**Menu** opens: SOUNDS, SAVE (current name), SAVE AS NEW, NEW PROJECT, and LOAD for each saved project. NEW and LOAD ask for a second click. Projects (including songs) are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`, and reopens from it next time.
+
+### Sounds
+
+**Menu → SOUNDS** lists the 32 starter sounds (drums, basses, keys, leads, pads, effects) and your own (marked `*`). A click loads the sound onto the selected track and keeps the list open, so you can play the pads and try the next one. **SAVE Tn SOUND** saves the track's sound to `/data/UserData/schwung/opgrid/sounds/`. A sound is the machine and every sound, LFO and send setting; the track's MIDI routing is kept.
 
 ### Mixer mode (tap Mute)
 
@@ -118,9 +130,18 @@ While the song plays, the clip grid shows what is playing but does not launch; S
 | PRE / !PRE | The last conditional step on this track played / did not |
 | 1ST / !1ST | First loop since play started / every loop after |
 
-## Sound (FM Poly)
+## Machines
 
-4 operators, 8 algorithms (op 4 has feedback), 22 ratios per operator, per-op decay envelopes for modulators, 12/24 dB LP, HP, BP and notch filter with its own ADSR, amp ADSR, drive, pan.
+Shift + jog on a sound page changes the track's machine. The first two pages are the machine's own; everything else (filter, amp, LFOs, sends) is shared.
+
+| Machine | What it is | Page 1 | Page 2 |
+|---|---|---|---|
+| FM Poly | 4-operator FM, 8 algorithms, op 4 feedback | ALGO, RAT1–4, LVL2–4 | FDBK, DEC2–4, DTUN, VELM, TUNE, GLID |
+| FM Perc | Drums: pitch sweep, 2-op FM body, coloured noise, click | SWP, SWPT, RAT, FM, FMD, NOIS, NDEC, COLR | FDBK, CLIK, –, –, DTUN, VELM, TUNE, GLID |
+| Morph | 2 wavetable oscillators morphing across 8 waves, phase distortion, ring mod, sub, drift | WAVA, WAVB, MIX, PD, TUNB, RING, NOIS, DRFT | SUBL, SUBO, –, –, DTUN, VELM, TUNE, GLID |
+| Stack | 1–8 detuned copies of a band-limited saw, square, triangle or sine, plus sub and noise | WAVE, VOIC, DTUN, ANIM, SUBL, SUBO, NOIS, MIX | –, –, –, –, DTUN, VELM, TUNE, GLID |
+
+### FM Poly algorithms
 
 | Algo | Routing |
 |---|---|
@@ -135,13 +156,20 @@ While the song plays, the clip grid shows what is playing but does not launch; S
 
 When an operator other than 1 is heard (a carrier), its LVL knob sets its volume.
 
+## Performance
+
+12 voices share 16 tracks. Measured on the build machine (x86) per 128-sample block: about 60 µs worst case with 12 FM voices, 3 LFOs each and every effect on; FM Perc ~36 µs, Morph ~45 µs, Stack (8 copies) ~62 µs. The Move's ARM cores are slower, and the budget is roughly 1,000 µs of the ~2,370 µs Schwung reports as free per block. Nothing allocates, locks or touches files on the audio thread.
+
 ## Layout
 
-- `src/og_engine.c/.h` — voices and DSP (no allocation or I/O on the audio thread)
+- `src/og_engine.c/.h` — voices, filter, envelopes, LFOs (no allocation or I/O on the audio thread)
+- `src/og_machines.c` — FM Perc, Morph and Stack oscillators, wavetables
 - `src/og_seq.c` — sequencer, runs every 16 samples inside the audio callback
 - `src/og_fx.c` — delay, reverb, chorus, master bus
 - `src/og_rec.c` — recording, count-in/click, undo, reset, clip serialization
 - `src/og_song.c` — song rows, bar-accurate song playback, performance capture
 - `src/og_plugin.c` — Schwung plugin API v2 glue and param protocol
-- `src/ui.js` — screen, pads, knobs, LEDs
-- `test/` — C engine, sequencer, effects, clip, recording and song tests (incl. a 10-minute drift test and a 20 s max-feedback stability test), Node UI tests with a fake host, fake DSP and in-memory filesystem
+- `src/ui.js` — screen, pads, knobs, LEDs, projects and sounds
+- `module/` — module.json, help.json, sounds.json (generated by `tools/make_sounds.mjs`)
+- `tools/` — engine bridge and screenshot renderer, starter sound generator
+- `test/` — C engine, sequencer, effects, clip, recording and song tests (incl. a 10-minute drift test and a 20 s max-feedback stability test), machine and starter-sound tests, Node UI tests with a fake host, fake DSP and in-memory filesystem, and a help-text width check

@@ -156,6 +156,20 @@ h.hold(49, true); h.cc(58); h.hold(49, false);
 h.cc(50);                                                      /* menu */
 h.tick(12);
 render(h, '8-menu', 'Project menu');
+/* sound list: starter sounds from the module dir */
+h.files.set('/data/UserData/schwung/modules/overtake/opgrid/sounds.json',
+    fs.readFileSync(path.join(root, 'module/sounds.json'), 'utf8'));
+h.cc(50); h.cc(50);
+h.midi(0xB0, 3, 127);                                          /* SOUNDS */
+h.midi(0xB0, 14, 1); h.midi(0xB0, 14, 1);
+h.midi(0xB0, 3, 127);                                          /* load the 3rd starter sound */
+h.tick(12);
+render(h, '9-sounds', 'Sound list: click loads, list stays open');
 h.cc(50);
+/* the loaded sound is FM Perc: its own page */
+jogTo(0);
+h.knob(0, 1);
+h.tick(700);
+render(h, '10-perc-page', 'FM Perc machine page');
 
 h.stop();

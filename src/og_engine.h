@@ -60,9 +60,16 @@ enum {
     P_L2DEST, P_L2WAVE, P_L2SYNC, P_L2RATE, P_L2DPTH, P_L2TRIG, P_L2PHAS, P_L2FADE,
     P_L3DEST, P_L3WAVE, P_L3SYNC, P_L3RATE, P_L3DPTH, P_L3TRIG, P_L3PHAS, P_L3FADE,
     /* Page 7: sends and MIDI out */
-    P_SDLY, P_SREV, P_SCHO, P_MCH, P_MOUT, P_RSV1, P_RSV2, P_RSV3,
+    P_SDLY, P_SREV, P_SCHO, P_MCH, P_MOUT, P_MACH, P_RSV2, P_RSV3,
     P_COUNT_USED
 };
+
+/* Machines. Param ids 0..11 mean different things per machine (ranges from
+ * og_machine_max); everything from P_DTUN on is shared. */
+enum { OG_MACH_POLY = 0, OG_MACH_PERC, OG_MACH_MORPH, OG_MACH_STACK, OG_MACHINES };
+#define OG_MACH_PARAMS   12
+int   og_machine_default(int machine, int pid);
+int   og_machine_max(int machine, int pid);
 
 #define OG_LFOS          3
 #define OG_LFO_PARAMS    8
@@ -227,6 +234,9 @@ int   og_song_load(og_t *g, int song, const char *hex);
 #define OG_CLIP_HEX_MAX  (2 * (4 + OG_STEPS * 10 + 1 + OG_LOCKS * 3))
 int   og_clip_dump(const og_t *g, int track, int clip, char *out, int out_len);
 int   og_clip_load(og_t *g, int track, int clip, const char *hex);  /* 1 = ok */
+
+/* Machine of a track: resets ids 0..11 to that machine's defaults. */
+void  og_set_machine(og_t *g, int track, int machine);
 
 /* Effects, solo, MIDI out. */
 void  og_set_fx(og_t *g, int id, int value);

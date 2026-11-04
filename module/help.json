@@ -1,0 +1,151 @@
+{
+  "title": "OpGrid",
+  "children": [
+    { "title": "Overview", "lines": [
+      "16-track FM groovebox",
+      "4 machines, locks,",
+      "clips, songs, effects.",
+      "",
+      "Back leaves; music",
+      "keeps playing.",
+      "Shift+Vol touch+Jog",
+      "click exits fully."
+    ]},
+    { "title": "Pads and steps", "lines": [
+      "Pads: play the track.",
+      "Up/Down: octave.",
+      "Shift+pad 1-16:",
+      " select track.",
+      "Steps: tap on/off.",
+      "Shift+step 1-4:",
+      " steps 1-16..49-64.",
+      "Delete+step: clear.",
+      "Play: start/stop."
+    ]},
+    { "title": "Pages", "lines": [
+      "Jog or Left/Right:",
+      " change page.",
+      "Machine pages (2)",
+      "FILTER, AMP,",
+      "LFO 1-3, SEND,",
+      "STEP, CLIP,",
+      "FX 1, FX 2.",
+      "Shift+knob: fine.",
+      "Shift+jog: machine."
+    ]},
+    { "title": "Step editing", "lines": [
+      "Hold a step and turn",
+      "a knob: that value is",
+      "locked on the step.",
+      "Hold step + pads:",
+      " note, then chord.",
+      "STEP page (hold step):",
+      " type, note, vel, len,",
+      " micro, ratchet,",
+      " condition, slide."
+    ]},
+    { "title": "Conditions", "lines": [
+      "A:B  loop A of B",
+      "5-95% chance",
+      "FILL  Shift+Mute held",
+      "PRE  last cond. played",
+      "1ST  first loop only",
+      "!    the opposite"
+    ]},
+    { "title": "Clips and scenes", "lines": [
+      "Loop: clip grid.",
+      "8 tracks x 4 scenes.",
+      "Tap: launch + edit.",
+      "Empty: select to edit.",
+      "Shift+pad: scene.",
+      "Mute+pad: stop track.",
+      "Copy+pad, pad: copy.",
+      "Delete+pad: clear.",
+      "Arrows: more tracks",
+      " and scenes.",
+      "Shift+Play: stop all."
+    ]},
+    { "title": "Recording", "lines": [
+      "Rec: arm the track.",
+      "Play pads and knobs",
+      "while it plays.",
+      "Shift+Rec: click",
+      " off/count-in/on.",
+      "CLIP page: RQNT",
+      " quantize, RMOD",
+      " dub or replace.",
+      "Armed + empty slot:",
+      " new clip; tap again",
+      " to set its length.",
+      "Undo: last take."
+    ]},
+    { "title": "Song mode", "lines": [
+      "Shift+Loop: songs.",
+      "Jog: row. Click on",
+      " ADD ROW to add.",
+      "Knobs: scene, bars,",
+      " repeats, tempo,",
+      " swing, song, loop.",
+      "Top pads: scene.",
+      "Low pads: mutes.",
+      "Play: from the row.",
+      "Click while playing:",
+      " jump at next bar.",
+      "Capture: record a",
+      " live performance."
+    ]},
+    { "title": "Mixer", "lines": [
+      "Tap Mute: mixer.",
+      "Low pads: mute",
+      " (Shift: solo).",
+      "Top pads: select.",
+      "Knobs: volume.",
+      "Left/Right: 1-8,",
+      " 9-16."
+    ]},
+    { "title": "Projects and sounds", "lines": [
+      "Menu: SOUNDS, save,",
+      " save as new, new,",
+      " load a project.",
+      "SOUNDS: 32 starter",
+      " sounds and yours;",
+      " stays open so you",
+      " can try each one.",
+      "Autosaves every 2",
+      "minutes and on exit."
+    ]},
+    { "title": "Machines", "children": [
+      { "title": "FM Poly", "lines": [
+        "4 operators,",
+        "8 algorithms.",
+        "Op 4 has feedback.",
+        "LVL sets mod depth,",
+        " or volume if heard."
+      ]},
+      { "title": "FM Perc", "lines": [
+        "Drums: pitch sweep,",
+        "FM body, noise with",
+        "colour, and a click."
+      ]},
+      { "title": "Morph", "lines": [
+        "2 wavetable oscs:",
+        "8 waves to morph,",
+        "phase distortion,",
+        "ring mod, sub, drift."
+      ]},
+      { "title": "Stack", "lines": [
+        "1-8 detuned copies",
+        "of saw, square, tri",
+        "or sine, plus sub",
+        "and noise."
+      ]}
+    ]},
+    { "title": "MIDI", "lines": [
+      "In: channel N plays",
+      " track N.",
+      "Out (SEND page):",
+      " MIDI channel, and",
+      " INT, EXT or BOTH."
+    ]}
+  ]
+}

@@ -226,7 +226,7 @@ void og_rec_param(og_t *g, int track, int pid, int value) {
     rec_position(g, &n, &micro);
     g->rec_quant = q;
     int s = (int)(n % c->length);
-    value = clampi(value, 0, og_param_max(pid));
+    value = clampi(value, 0, og__pmax(g, track, pid));
     /* a lock needs a step to live on: an empty step becomes lock-only */
     if (!(c->steps[s].flags & (OG_STEP_NOTE | OG_STEP_LOCK))) c->steps[s].flags |= OG_STEP_LOCK;
     og_lock_t *slot = NULL;

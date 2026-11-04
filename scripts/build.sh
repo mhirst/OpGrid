@@ -7,13 +7,14 @@ cd "$(dirname "$0")/.."
 
 OUT=build/opgrid
 CFLAGS="-O3 -shared -fPIC -Wall -Wextra -Iinclude -Isrc -mcpu=cortex-a53"
-SRC="src/og_engine.c src/og_seq.c src/og_fx.c src/og_rec.c src/og_song.c src/og_plugin.c"
+SRC="src/og_engine.c src/og_machines.c src/og_seq.c src/og_fx.c src/og_rec.c src/og_song.c src/og_plugin.c"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
 cp module/module.json "$OUT/"
 cp src/ui.js "$OUT/ui.js"
-[ -f module/help.json ] && cp module/help.json "$OUT/"
+cp module/help.json "$OUT/"
+cp module/sounds.json "$OUT/"
 
 if command -v aarch64-linux-gnu-gcc >/dev/null; then
     aarch64-linux-gnu-gcc $CFLAGS $SRC -o "$OUT/dsp.so" -lm
