@@ -25,7 +25,7 @@ import { setLED, setButtonLED, decodeDelta, decodeAcceleratedDelta, invalidateLe
 const PAD0 = 68, PADS = 32, STEP0 = 16, STEPS = 16;
 const KNOB0 = 71, JOG = 14;
 const CC_SHIFT = 49, CC_DOWN = 54, CC_UP = 55, CC_LEFT = 62, CC_RIGHT = 63;
-const CC_PLAY = 85, CC_MUTE = 88, CC_DELETE = 119;
+const CC_PLAY = 85, CC_MUTE = 88, CC_DELETE = 119, CC_COPY = 60, CC_LOOP = 58;
 const WHITE = 120, GREY = 124, DARK = 119, OFF = 0, LED_BRIGHT = 127, LED_DIM = 16;
 
 /* ---------- tracks ---------- */
@@ -156,12 +156,20 @@ const CLIP_KNOBS = [
     ['SWNG', 80, 50, v => `${v}%`],
     ['BPM', 300, 30, num],
     ['SYNC', 1, 0, v => v ? 'MOVE' : 'OWN'],
+    ['QUAN', 5, 0, v => LAUNCH_QS[v]],
 ];
+const LAUNCH_QS = ['OFF', 'STEP', 'BEAT', '1BAR', '2BAR', '4BAR'];
+/* clip slot states (must match OG_CLIP_*) */
+const CS_EMPTY = 0, CS_STOPPED = 1, CS_QUEUED = 2, CS_PLAYING = 3, CS_STOPPING = 4;
+const CLIPS = 8;
 
 /* ---------- state ---------- */
 let track = 0, page = 0, octave = 1, stepPage = 0;
 let shift = false, muteHeld = false, muteUsed = false, deleteHeld = false, fillOn = false;
 let mixer = false, mixBank = 0;
+let clipMode = false, trackBank = 0, sceneBank = 0, copyHeld = false, copySrc = null, launchQ = 3;
+const clipStates = new Array(TRACKS * CLIPS).fill(0);
+const editClips = new Array(TRACKS).fill(0);
 const solo = new Array(16).fill(0);
 let playing = false, tempo = 120, sync = 1;
 let touchedKnob = -1, touchedUntil = 0, tickCount = 0;
@@ -367,7 +375,62 @@ function editStep(knob, delta) {
 
 function clipKnobValue(knob) {
     const c = clipInfo[track];
-    return [c.len, c.speed, c.swing, tempo, sync][knob];
+    return [c.len, c.speed, c.swing, tempo, sync, launchQ][knob];
+}
+
+/* ---------- clips ---------- */
+function pullClips() {
+    const c = getParam('clips');
+    if (c && c.length >= TRACKS * CLIPS) {
+        let changed = false;
+        for (let i = 0; i < TRACKS * CLIPS; i++) {
+            const v = c.charCodeAt(i) - 48;
+            if (v !== clipStates[i]) { clipStates[i] = v; changed = true; }
+        }
+        if (changed) dirty = true;
+    }
+    const e = getParam('edits');
+    if (e && e.length >= TRACKS) for (let t = 0; t < TRACKS; t++) editClips[t] = e.charCodeAt(t) - 48;
+    const q = parseInt(getParam('lq'), 10);
+    if (Number.isFinite(q)) launchQ = q;
+}
+
+const clipState = (t, c) => clipStates[t * CLIPS + c];
+
+/* select a clip for editing (and its track) */
+function editClipSelect(t, c) {
+    releaseHeldSteps();
+    editClips[t] = c;
+    setParam('edit', `${t} ${c}`);
+    track = t;
+    stepPage = 0;
+    pullTrack(t);
+    dirty = true;
+}
+
+function onClipPad(i, on) {
+    if (!on) return;
+    pullClips();                         /* decide on fresh slot states */
+    const row = Math.floor(i / 8), col = i % 8;
+    const t = trackBank * 8 + col, c = sceneBank * 4 + (3 - row);
+    if (deleteHeld) {
+        setParam('cclr', `${t} ${c}`);
+        if (t === track && c === editClips[t]) pullTrack(t);
+    } else if (copyHeld) {
+        if (!copySrc) copySrc = [t, c];
+        else { setParam('ccopy', `${copySrc[0]} ${copySrc[1]} ${t} ${c}`); copySrc = null; }
+    } else if (muteHeld) {
+        muteUsed = true;
+        setParam('stop', `${t}`);
+    } else if (shift) {
+        setParam('scene', `${c}`);
+    } else {
+        const st = clipState(t, c);
+        editClipSelect(t, c);
+        if (st !== CS_EMPTY) setParam('launch', `${t} ${c}`);
+    }
+    pullClips();
+    dirty = true;
 }
 
 function editClip(knob, delta) {
@@ -381,7 +444,8 @@ function editClip(knob, delta) {
     case 1: c.speed = next; setParam('cspd', `${track} ${next}`); break;
     case 2: c.swing = next; setParam('cswg', `${track} ${next}`); break;
     case 3: tempo = next; sync = 0; setParam('tempo', next); break;
-    default: sync = next; setParam('sync', next); break;
+    case 4: sync = next; setParam('sync', next); break;
+    default: launchQ = next; setParam('lq', next); break;
     }
 }
 
@@ -436,6 +500,7 @@ function padToNote(i) {
 }
 
 function onPad(i, vel, on) {
+    if (clipMode) { onClipPad(i, on); return; }
     if (mixer) {
         /* bottom 16 pads: mute (Shift = solo); top 16: select track */
         if (!on) return;
@@ -493,7 +558,7 @@ globalThis.onMidiMessageInternal = function (data) {
         if (mixer) small = false;
         else if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && PARAMS[pid][2] < 40; }
         else if (page === PAGE_STEP) small = knob !== 1 && knob !== 2;
-        else if (page === PAGE_CLIP) small = knob === 1 || knob === 4;
+        else if (page === PAGE_CLIP) small = knob === 1 || knob >= 4;
         else small = FX[(page === PAGE_FX2 ? 8 : 0) + knob][1] < 40;
         const raw = small ? decodeDelta(d2) : decodeAcceleratedDelta(d2, knob);
         const delta = shift && !small ? Math.sign(raw) : raw;
@@ -513,18 +578,35 @@ globalThis.onMidiMessageInternal = function (data) {
         else {
             muteHeld = false;
             /* a tap on Mute (no pads, no Shift) toggles mixer mode */
-            if (!muteUsed && !shift) { mixer = !mixer; if (mixer) pullMix(); }
+            if (!muteUsed && !shift) { mixer = !mixer; if (mixer) { clipMode = false; pullMix(); } }
         }
         updateFill(); dirty = true; break;
     case CC_DELETE: deleteHeld = press; break;
+    case CC_COPY: copyHeld = press; if (!press) copySrc = null; dirty = true; break;
+    case CC_LOOP:
+        if (press && !shift) { clipMode = !clipMode; if (clipMode) { mixer = false; pullClips(); } dirty = true; }
+        break;
     case CC_PLAY:
+        if (press && shift) { setParam('stopall', 1); pullClips(); dirty = true; break; }
         if (press) { playing = !playing; setParam('play', playing ? 1 : 0); dirty = true; }
         break;
     case JOG: { const dl = decodeDelta(d2); if (dl) changePage(dl); break; }
-    case CC_LEFT: if (press) { if (mixer) { mixBank = 0; dirty = true; } else changePage(-1); } break;
-    case CC_RIGHT: if (press) { if (mixer) { mixBank = 1; dirty = true; } else changePage(1); } break;
-    case CC_UP: if (press) { octave = Math.min(6, octave + 1); dirty = true; } break;
-    case CC_DOWN: if (press) { octave = Math.max(-2, octave - 1); dirty = true; } break;
+    case CC_LEFT: if (press) {
+        if (clipMode) { trackBank = 0; dirty = true; }
+        else if (mixer) { mixBank = 0; dirty = true; } else changePage(-1);
+    } break;
+    case CC_RIGHT: if (press) {
+        if (clipMode) { trackBank = 1; dirty = true; }
+        else if (mixer) { mixBank = 1; dirty = true; } else changePage(1);
+    } break;
+    case CC_UP: if (press) {
+        if (clipMode) sceneBank = 0; else octave = Math.min(6, octave + 1);
+        dirty = true;
+    } break;
+    case CC_DOWN: if (press) {
+        if (clipMode) sceneBank = 1; else octave = Math.max(-2, octave - 1);
+        dirty = true;
+    } break;
     default: break;
     }
 };
@@ -540,7 +622,7 @@ function updateFill() {
 function changePage(d) {
     page = (page + d + PAGES.length) % PAGES.length;
     touchedKnob = -1;
-    if (page === PAGE_CLIP) { pullClip(track); pullTransport(); }
+    if (page === PAGE_CLIP) { pullClip(track); pullTransport(); pullClips(); }
     if (page === PAGE_FX1 || page === PAGE_FX2) pullFx();
     dirty = true;
 }
@@ -563,7 +645,22 @@ function stepColor(i) {
     return i % 4 === 0 ? DARK : OFF;
 }
 
+function clipPadColor(i) {
+    const row = Math.floor(i / 8), col = i % 8;
+    const t = trackBank * 8 + col, c = sceneBank * 4 + (3 - row);
+    const blink = (tickCount >> 6) & 1;
+    if (copySrc && copySrc[0] === t && copySrc[1] === c) return WHITE;
+    switch (clipState(t, c)) {
+    case CS_PLAYING: return trackBright(t);
+    case CS_QUEUED: return blink ? trackBright(t) : OFF;
+    case CS_STOPPING: return blink ? trackBright(t) : trackDim(t);
+    case CS_STOPPED: return t === track && c === editClips[t] ? WHITE : trackDim(t);
+    default: return t === track && c === editClips[t] ? GREY : OFF;
+    }
+}
+
 function padColor(i) {
+    if (clipMode) return clipPadColor(i);
     if (mixer) {
         if (i < 16) return solo[i] ? WHITE : clipInfo[i].mute ? trackDim(i) : trackBright(i);
         const t = i - 16;
@@ -585,6 +682,8 @@ function desiredLeds() {
     out.push(['c', CC_UP, octave < 6 ? LED_DIM : OFF], ['c', CC_DOWN, octave > -2 ? LED_DIM : OFF]);
     out.push(['c', CC_SHIFT, shift ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_MUTE, muteHeld || mixer ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_LOOP, clipMode ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_COPY, copyHeld ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_DELETE, deleteHeld ? LED_BRIGHT : LED_DIM]);
     return out;
 }
@@ -619,7 +718,8 @@ function drawHeader() {
     fill_rect(0, 0, 128, 10, 1);
     const hs = firstHeld();
     let left = `T${String(track + 1).padStart(2, '0')}`;
-    left += hs ? ` STEP ${hs[0] + 1}` : (clipInfo[track].mute ? ' MUTED' : ' FM POLY');
+    left += ` C${editClips[track] + 1}`;
+    left += hs ? ` STP${hs[0] + 1}` : (clipInfo[track].mute ? ' MUTE' : '');
     if (!mixer && (page === PAGE_FX1 || page === PAGE_FX2)) left = FX_TITLES[page - PAGE_FX1];
     if (mixer) left = `TRACKS ${mixBank * 8 + 1}-${mixBank * 8 + 8}`;
     print(2, 1, left, 0);
@@ -634,6 +734,7 @@ function drawScreen() {
     const hot = k => k === touchedKnob && tickCount < touchedUntil;
 
     if (mixer) { drawMixer(hot); return; }
+    if (clipMode && !(touchedKnob >= 0 && tickCount < touchedUntil)) { drawClips(); return; }
     if (page < SOUND_PAGES) {
         for (let k = 0; k < 8; k++) {
             const pid = page * 8 + k;
@@ -681,6 +782,29 @@ function drawScreen() {
     }
 }
 
+function drawClips() {
+    /* header */
+    fill_rect(0, 0, 128, 10, 1);
+    print(2, 1, `CLIPS T${trackBank * 8 + 1}-${trackBank * 8 + 8} S${sceneBank * 4 + 1}-${sceneBank * 4 + 4}`, 0);
+    const q = LAUNCH_QS[launchQ];
+    print(126 - text_width(q), 1, q, 0);
+    /* 8 x 4 grid, scene rows top to bottom */
+    for (let col = 0; col < 8; col++) {
+        const t = trackBank * 8 + col;
+        for (let r = 0; r < 4; r++) {
+            const c = sceneBank * 4 + r;
+            const x = col * 16 + 1, y = 12 + r * 11;
+            const st = clipState(t, c);
+            if (st === CS_PLAYING || st === CS_STOPPING) fill_rect(x, y, 14, 9, 1);
+            else if (st === CS_QUEUED) { draw_rect(x, y, 14, 9, 1); fill_rect(x + 3, y + 3, 8, 3, 1); }
+            else if (st === CS_STOPPED) draw_rect(x, y, 14, 9, 1);
+            else fill_rect(x + 6, y + 4, 2, 1, 1);
+            if (t === track && c === editClips[t]) draw_rect(x - 1, y - 1, 16, 11, 1);
+        }
+    }
+    print(2, 56, 'Shift=scene Mute=stop', 1);
+}
+
 function drawMixer(hot) {
     for (let k = 0; k < 8; k++) {
         const t = mixBank * 8 + k;
@@ -702,6 +826,7 @@ globalThis.init = function () {
     pullTransport();
     pullFx();
     pullMix();
+    pullClips();
     playing = getParam('play') === '1';
     ledCache.clear();
     dirty = true;
@@ -729,6 +854,8 @@ globalThis.tick = function () {
         if (p.length === TRACKS) playheads = p;
     }
     if (stepsDirty && tickCount % 4 === 0) { pullSteps(track); pullClip(track); }
+    if (clipMode && tickCount % 16 === 0) pullClips();
+    if (clipMode && tickCount % 64 === 0) dirty = true;      /* blink */
     if (sync && tickCount % 256 === 0) { const old = tempo; pullTransport(); if (old !== tempo) dirty = true; }
     flushLeds();
     if (dirty && tickCount % 4 === 0) {
@@ -741,5 +868,7 @@ globalThis.tick = function () {
 globalThis.__opgrid = {
     PARAMS, PAGES, CONDS, LENS, SPEEDS, FX, DEST_NAMES, WAVES, SYNC_RATES, fxValues, solo,
     values, stepFlags, clipInfo, held,
-    state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync, mixer, mixBank }),
+    clipStates, editClips, LAUNCH_QS,
+    state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync, mixer, mixBank,
+        clipMode, trackBank, sceneBank, launchQ }),
 };

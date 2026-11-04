@@ -33,6 +33,15 @@
  *   get "fx"                   comma list of all FX values
  *   get "mix"                  16 chars per row: mute flags, then 16 solo flags
  *   get "gr"                   master compressor gain (0..1)
+ *
+ * Clips and scenes:
+ *   set "launch" "<t> <c>"   "stop" "<t>"   "scene" "<r>"   "stopall"
+ *   set "lq" "<0..5>"        launch quantize: off, step, beat, 1/2/4 bars
+ *   set "edit" "<t> <c>"     clip the step/lock/clip calls act on
+ *   set "ccopy" "<st> <sc> <dt> <dc>"   "cclr" "<t> <c>"
+ *   get "clips"              128 chars, track-major: OG_CLIP_* state per slot
+ *   get "edits"              16 chars: each track's edit clip
+ *   get "lq"
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,6 +130,22 @@ static void plug_set(void *inst, const char *key, const char *val) {
         in->sync = val && atoi(val);
     } else if (!strcmp(key, "fill")) {
         og_set_fill(g, val && atoi(val));
+    } else if (!strcmp(key, "launch")) {
+        if (parse_ints(val, a, 2) == 2) og_clip_launch(g, a[0], a[1]);
+    } else if (!strcmp(key, "stop")) {
+        if (parse_ints(val, a, 1) == 1) og_track_stop(g, a[0]);
+    } else if (!strcmp(key, "scene")) {
+        if (parse_ints(val, a, 1) == 1) og_scene_launch(g, a[0]);
+    } else if (!strcmp(key, "stopall")) {
+        og_stop_all(g);
+    } else if (!strcmp(key, "lq")) {
+        if (parse_ints(val, a, 1) == 1) og_set_launch_quant(g, a[0]);
+    } else if (!strcmp(key, "edit")) {
+        if (parse_ints(val, a, 2) == 2) og_set_edit_clip(g, a[0], a[1]);
+    } else if (!strcmp(key, "ccopy")) {
+        if (parse_ints(val, a, 4) == 4) og_clip_copy(g, a[0], a[1], a[2], a[3]);
+    } else if (!strcmp(key, "cclr")) {
+        if (parse_ints(val, a, 2) == 2) og_clip_clear(g, a[0], a[1]);
     } else if (!strcmp(key, "fx")) {
         if (parse_ints(val, a, 2) == 2) og_set_fx(g, a[0], a[1]);
     } else if (!strcmp(key, "solo")) {
@@ -165,6 +190,20 @@ static int plug_get(void *inst, const char *key, char *buf, int buf_len) {
         return w;
     }
     if (!strcmp(key, "play")) return snprintf(buf, (size_t)buf_len, "%d", og_is_playing(g));
+    if (!strcmp(key, "clips")) {
+        if (buf_len < OG_TRACKS * OG_CLIPS + 1) return -1;
+        for (int t = 0; t < OG_TRACKS; t++)
+            for (int c = 0; c < OG_CLIPS; c++) buf[t * OG_CLIPS + c] = (char)('0' + og_clip_state(g, t, c));
+        buf[OG_TRACKS * OG_CLIPS] = 0;
+        return OG_TRACKS * OG_CLIPS;
+    }
+    if (!strcmp(key, "edits")) {
+        if (buf_len < OG_TRACKS + 1) return -1;
+        for (int t = 0; t < OG_TRACKS; t++) buf[t] = (char)('0' + og_get_edit_clip(g, t));
+        buf[OG_TRACKS] = 0;
+        return OG_TRACKS;
+    }
+    if (!strcmp(key, "lq")) return snprintf(buf, (size_t)buf_len, "%d", og_get_launch_quant(g));
     if (!strcmp(key, "fx")) {
         int w = 0;
         for (int i = 0; i < FX_COUNT && w < buf_len - 5; i++)

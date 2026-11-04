@@ -22,10 +22,16 @@ static inline int clampi(int x, int lo, int hi) { return x < lo ? lo : x > hi ? 
 float og_len_steps(int idx) { return k_lens[clampi(idx, 0, OG_LENS - 1)]; }
 float og_speed_mul(int idx) { return k_speeds[clampi(idx, 0, OG_SPEEDS - 1)]; }
 
+/* the clip the UI is editing */
 static og_clip_t *cur_clip(og_t *g, int track) {
-    return &g->clips[track][g->ts[track].clip];
+    og_clip_t *c = &g->clips[track][g->ts[track].edit];
+    return c;
 }
 static const og_clip_t *cur_clip_c(const og_t *g, int track) {
+    return &g->clips[track][g->ts[track].edit];
+}
+/* the clip that is playing (caller checks ts.clip >= 0) */
+static og_clip_t *play_clip(og_t *g, int track) {
     return &g->clips[track][g->ts[track].clip];
 }
 static int track_ok(int t) { return t >= 0 && t < OG_TRACKS; }
@@ -52,7 +58,10 @@ void og__seq_init(og_t *g) {
         for (int c = 0; c < OG_CLIPS; c++) clip_reset(&g->clips[t][c]);
         g->ts[t].cur_step = -1;
         g->ts[t].clip = 0;
+        g->ts[t].edit = 0;
+        g->ts[t].queued = OG_Q_NONE;
     }
+    g->launch_q = 3;            /* 1 bar */
     g->bpm = 120.0f;
     g->rng = 0x9E3779B9u;
 }
@@ -83,10 +92,16 @@ void og_play(og_t *g, int on) {
     on = on ? 1 : 0;
     if (on == g->playing) return;
     if (on) {
+        g->gpos = 0.0;
         for (int t = 0; t < OG_TRACKS; t++) {
-            g->ts[t].pos = 0.0;
-            g->ts[t].cur_step = -1;
-            g->ts[t].pre = 0;
+            og_trackseq_t *ts = &g->ts[t];
+            if (ts->queued != OG_Q_NONE) {   /* queued while stopped: take effect now */
+                ts->clip = ts->queued == OG_Q_STOP ? -1 : ts->queued;
+                ts->queued = OG_Q_NONE;
+            }
+            ts->pos = 0.0;
+            ts->cur_step = -1;
+            ts->pre = 0;
         }
     } else {
         offs_flush(g, -1);
@@ -104,6 +119,8 @@ int   og_get_mute(const og_t *g, int track) { return (g && track_ok(track)) ? g-
 
 int og_track_step(const og_t *g, int track) {
     if (!g || !track_ok(track) || !g->playing) return -1;
+    const og_trackseq_t *ts = &g->ts[track];
+    if (ts->clip < 0 || ts->clip != ts->edit) return -1;   /* playhead only on the edited clip */
     const og_clip_t *c = cur_clip_c(g, track);
     long n = (long)floor(g->ts[track].pos);
     if (n < 0) return -1;
@@ -114,7 +131,9 @@ int og_track_step(const og_t *g, int track) {
 
 void og_step_set(og_t *g, int track, int step, int field, int value) {
     if (!g || !track_ok(track) || !step_ok(step)) return;
-    og_step_t *st = &cur_clip(g, track)->steps[step];
+    og_clip_t *clip = cur_clip(g, track);
+    clip->used = 1;
+    og_step_t *st = &clip->steps[step];
     switch (field) {
     case OG_F_FLAGS: st->flags = (uint8_t)clampi(value, 0, 7); break;
     case OG_F_NOTE0: st->notes[0] = (uint8_t)clampi(value, 1, 127); break;
@@ -164,6 +183,7 @@ int og_lock_set(og_t *g, int track, int step, int pid, int value) {
         if (!l->used && !free_slot) free_slot = l;
     }
     if (!free_slot) return 0;
+    c->used = 1;
     free_slot->used = 1;
     free_slot->step = (uint8_t)step;
     free_slot->pid = (uint8_t)pid;
@@ -208,9 +228,75 @@ int og_lock_count(const og_t *g, int track) {
 
 /* ---- clip settings --------------------------------------------------- */
 
-void og_clip_set_length(og_t *g, int t, int len) { if (g && track_ok(t)) cur_clip(g, t)->length = (uint8_t)clampi(len, 1, OG_STEPS); }
-void og_clip_set_speed(og_t *g, int t, int sp)   { if (g && track_ok(t)) cur_clip(g, t)->speed = (uint8_t)clampi(sp, 0, OG_SPEEDS - 1); }
-void og_clip_set_swing(og_t *g, int t, int sw)   { if (g && track_ok(t)) cur_clip(g, t)->swing = (uint8_t)clampi(sw, 50, 80); }
+void og_clip_set_length(og_t *g, int t, int len) { if (g && track_ok(t)) { cur_clip(g, t)->length = (uint8_t)clampi(len, 1, OG_STEPS); cur_clip(g, t)->used = 1; } }
+void og_clip_set_speed(og_t *g, int t, int sp)   { if (g && track_ok(t)) { cur_clip(g, t)->speed = (uint8_t)clampi(sp, 0, OG_SPEEDS - 1); cur_clip(g, t)->used = 1; } }
+void og_clip_set_swing(og_t *g, int t, int sw)   { if (g && track_ok(t)) { cur_clip(g, t)->swing = (uint8_t)clampi(sw, 50, 80); cur_clip(g, t)->used = 1; } }
+
+/* ---- clips and scenes ------------------------------------------------ */
+
+static const int k_launch_q[OG_LAUNCH_QS] = { 0, 1, 4, 16, 32, 64 };
+static int clip_ok(int c) { return c >= 0 && c < OG_CLIPS; }
+
+void og_set_launch_quant(og_t *g, int q) { if (g) g->launch_q = clampi(q, 0, OG_LAUNCH_QS - 1); }
+int  og_get_launch_quant(const og_t *g) { return g ? g->launch_q : 3; }
+
+static void queue(og_t *g, int track, int what) {
+    og_trackseq_t *ts = &g->ts[track];
+    if (!g->playing) {                 /* stopped transport: switch now */
+        ts->clip = what == OG_Q_STOP ? -1 : what;
+        ts->queued = OG_Q_NONE;
+        ts->pos = 0.0;
+        return;
+    }
+    int q = k_launch_q[g->launch_q];
+    ts->queued = what;
+    ts->queue_at = q ? ceil(g->gpos / q - 1e-9) * q : g->gpos;
+}
+
+void og_clip_launch(og_t *g, int track, int clip) {
+    if (!g || !track_ok(track) || !clip_ok(clip)) return;
+    queue(g, track, clip);
+}
+void og_track_stop(og_t *g, int track) {
+    if (!g || !track_ok(track)) return;
+    if (g->ts[track].clip < 0 && g->ts[track].queued == OG_Q_NONE) return;
+    queue(g, track, OG_Q_STOP);
+}
+void og_scene_launch(og_t *g, int scene) {
+    if (!g || !clip_ok(scene)) return;
+    for (int t = 0; t < OG_TRACKS; t++) {
+        if (g->clips[t][scene].used) og_clip_launch(g, t, scene);
+        else og_track_stop(g, t);
+    }
+}
+void og_stop_all(og_t *g) {
+    if (!g) return;
+    for (int t = 0; t < OG_TRACKS; t++) og_track_stop(g, t);
+}
+
+int og_clip_state(const og_t *g, int track, int clip) {
+    if (!g || !track_ok(track) || !clip_ok(clip)) return OG_CLIP_EMPTY;
+    const og_trackseq_t *ts = &g->ts[track];
+    if (ts->clip == clip) return ts->queued == OG_Q_STOP || (ts->queued >= 0 && ts->queued != clip)
+                                 ? OG_CLIP_STOPPING : OG_CLIP_PLAYING;
+    if (ts->queued == clip) return OG_CLIP_QUEUED;
+    return g->clips[track][clip].used ? OG_CLIP_STOPPED : OG_CLIP_EMPTY;
+}
+int og_playing_clip(const og_t *g, int track) { return (g && track_ok(track)) ? g->ts[track].clip : -1; }
+void og_set_edit_clip(og_t *g, int track, int clip) {
+    if (g && track_ok(track) && clip_ok(clip)) g->ts[track].edit = clip;
+}
+int og_get_edit_clip(const og_t *g, int track) { return (g && track_ok(track)) ? g->ts[track].edit : 0; }
+
+void og_clip_copy(og_t *g, int st, int sc, int dt, int dc) {
+    if (!g || !track_ok(st) || !track_ok(dt) || !clip_ok(sc) || !clip_ok(dc)) return;
+    if (st == dt && sc == dc) return;
+    g->clips[dt][dc] = g->clips[st][sc];
+}
+void og_clip_clear(og_t *g, int track, int clip) {
+    if (!g || !track_ok(track) || !clip_ok(clip)) return;
+    clip_reset(&g->clips[track][clip]);
+}
 int og_clip_length(const og_t *g, int t) { return (g && track_ok(t)) ? cur_clip_c(g, t)->length : 16; }
 int og_clip_speed(const og_t *g, int t)  { return (g && track_ok(t)) ? cur_clip_c(g, t)->speed : OG_SPEED_1X; }
 int og_clip_swing(const og_t *g, int t)  { return (g && track_ok(t)) ? cur_clip_c(g, t)->swing : 50; }
@@ -290,7 +376,7 @@ static int cond_eval(og_t *g, int track, long n, const og_clip_t *c, int cond) {
 
 static void fire(og_t *g, int track, long n, int s, int j, double at) {
     og_trackseq_t *ts = &g->ts[track];
-    og_clip_t *c = cur_clip(g, track);
+    og_clip_t *c = play_clip(g, track);
     og_step_t *st = &c->steps[s];
 
     /* the condition is decided once per step, ratchets follow it */
@@ -323,10 +409,42 @@ static void fire(og_t *g, int track, long n, int s, int j, double at) {
 void og__seq_advance(og_t *g, int frames) {
     if (!g->playing) { g->sample_clock += (uint64_t)frames; return; }
     double step_samples = (double)g->sr * 60.0 / (double)g->bpm / 4.0;
+    double gs = g->gpos, ge = gs + (double)frames / step_samples;
 
     for (int t = 0; t < OG_TRACKS; t++) {
         og_trackseq_t *ts = &g->ts[t];
-        og_clip_t *c = cur_clip(g, t);
+
+        /* a queued launch or stop lands inside this tick */
+        if (ts->queued != OG_Q_NONE && ts->queue_at < ge) {
+            double b = ts->queue_at > gs ? ts->queue_at : gs;
+            if (ts->queued == OG_Q_STOP) {
+                offs_flush(g, t);
+                ts->clip = -1;
+            } else {
+                /* keep pending releases in step with the restarted position */
+                double old_at_b = ts->clip >= 0
+                    ? ts->pos + (b - gs) * og_speed_mul(play_clip(g, t)->speed) : 0.0;
+                for (int i = 0; i < OG_NOTEOFFS; i++)
+                    if (g->offs[i].used && g->offs[i].track == t) g->offs[i].at -= old_at_b;
+                ts->clip = ts->queued;
+                ts->pos = (gs - b) * og_speed_mul(play_clip(g, t)->speed);
+                ts->pre = 0;
+                ts->cur_step = -1;
+            }
+            ts->queued = OG_Q_NONE;
+        }
+        if (ts->clip < 0) {
+            /* stopped track: still let earlier notes end */
+            for (int i = 0; i < OG_NOTEOFFS; i++)
+                if (g->offs[i].used && g->offs[i].track == t) {
+                    og_note_off(g, t, g->offs[i].note);
+                    log_ev(g, t, g->offs[i].note, 0, 0);
+                    g->offs[i].used = 0;
+                }
+            continue;
+        }
+
+        og_clip_t *c = play_clip(g, t);
         double start = ts->pos;
         double end = start + (double)frames / step_samples * og_speed_mul(c->speed);
 
@@ -355,5 +473,6 @@ void og__seq_advance(og_t *g, int frames) {
         }
         ts->pos = end;
     }
+    g->gpos = ge;
     g->sample_clock += (uint64_t)frames;
 }

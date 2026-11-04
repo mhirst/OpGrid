@@ -31,6 +31,8 @@ const dsp = {
     clip: Array.from({ length: 16 }, () => [16, 4, 50, 0]),
     mute: new Array(16).fill(0), solo: new Array(16).fill(0), play: 0, tempo: 120, sync: 1, fill: 0,
     fx: [7, 50, 64, 64, 80, 70, 10, 60, 60, 30, 100, 127, 32, 0, 0, 100],
+    clips: Array.from({ length: 16 }, () => [3, 0, 0, 0, 0, 0, 0, 0]),   /* states, track-major */
+    edits: new Array(16).fill(0), lq: 3, log: [],
 };
 const reset = s => [0, 60, 0, 0, 0, 100, 4, 1, 0, 0];
 const ni = v => `${v}`.split(' ').map(Number);
@@ -45,6 +47,15 @@ function dspSet(k, v) {
     case 'mute': dsp.mute[a[0]] = a[1]; break;
     case 'solo': dsp.solo[a[0]] = a[1]; break;
     case 'fx': dsp.fx[a[0]] = a[1]; break;
+    case 'edit': dsp.edits[a[0]] = a[1]; break;
+    case 'lq': dsp.lq = a[0]; break;
+    case 'launch': for (let c = 0; c < 8; c++) if (dsp.clips[a[0]][c] === 3) dsp.clips[a[0]][c] = 1;
+        dsp.clips[a[0]][a[1]] = 3; break;
+    case 'stop': for (let c = 0; c < 8; c++) if (dsp.clips[a[0]][c] === 3) dsp.clips[a[0]][c] = 1; break;
+    case 'scene': dsp.log.push(['scene', a[0]]); break;
+    case 'stopall': dsp.log.push(['stopall']); break;
+    case 'ccopy': dsp.clips[a[2]][a[3]] = Math.max(1, dsp.clips[a[2]][a[3]]); dsp.log.push(['ccopy', ...a]); break;
+    case 'cclr': dsp.clips[a[0]][a[1]] = 0; break;
     case 'sf': dsp.steps[a[0]][a[1]][a[2]] = a[3]; break;
     case 'sclr': dsp.steps[a[0]][a[1]] = reset();
         for (const key of [...dsp.locks[a[0]].keys()]) if (key.startsWith(`${a[1]}:`)) dsp.locks[a[0]].delete(key);
@@ -75,6 +86,9 @@ function dspGet(k) {
     if ((m = k.match(/^clip:(\d+)$/))) { const t = +m[1]; return [...dsp.clip[t].slice(0, 3), dsp.locks[t].size, dsp.mute[t]].join(','); }
     if (k === 'tempo') return `${dsp.tempo}.0`;
     if (k === 'fx') return dsp.fx.join(',');
+    if (k === 'clips') return dsp.clips.map(r => r.join('')).join('');
+    if (k === 'edits') return dsp.edits.join('');
+    if (k === 'lq') return `${dsp.lq}`;
     if (k === 'mix') return dsp.mute.join('') + dsp.solo.join('');
     if (k === 'sync') return `${dsp.sync}`;
     if (k === 'play') return `${dsp.play}`;
@@ -293,6 +307,43 @@ midi(0xB0, 88, 127); midi(0x90, 68, 100); midi(0xB0, 88, 0);
 check(!ui.state().mixer && dsp.mute[0] === 1, 'mute+pad mutes without entering mixer');
 midi(0xB0, 88, 127); midi(0x90, 68, 100); midi(0xB0, 88, 0);
 midi(0xB0, 62, 127);                                       /* back to page via left */
+
+/* ---- milestone 5: clip launch grid ---- */
+midi(0xB0, 58, 127); midi(0xB0, 58, 0);
+check(ui.state().clipMode, 'Loop enters clip mode');
+ticks(20);
+/* top-left pad = track 1, scene 1 (playing), pad 68 = bottom-left = track 1, scene 4 */
+const padFor = (t, sc) => 68 + (3 - (sc % 4)) * 8 + (t % 8);
+midi(0x90, padFor(2, 1), 100);                              /* empty slot: select for editing, no launch */
+check(dsp.edits[2] === 1 && ui.state().track === 2, `empty slot selected for editing: ${dsp.edits}`);
+check(dsp.clips[2][1] === 0, 'empty slot not launched');
+dsp.clips[2][1] = 1;                                       /* now it has content */
+midi(0x90, padFor(2, 1), 100);
+check(dsp.clips[2][1] === 3 && dsp.clips[2][0] === 1, 'tapping a clip with content launches it');
+midi(0xB0, 88, 127); midi(0x90, padFor(2, 0), 100); midi(0xB0, 88, 0);
+check(dsp.clips[2][1] === 1 && !ui.state().mixer, 'Mute + pad stops the track (and does not open mixer)');
+midi(0xB0, 49, 127); midi(0x90, padFor(5, 2), 100); midi(0xB0, 49, 0);
+check(JSON.stringify(dsp.log.at(-1)) === '["scene",2]', `Shift + pad launches scene 3: ${JSON.stringify(dsp.log.at(-1))}`);
+midi(0xB0, 60, 127); midi(0x90, padFor(2, 1), 100); midi(0x90, padFor(6, 3), 100); midi(0xB0, 60, 0);
+check(JSON.stringify(dsp.log.at(-1)) === '["ccopy",2,1,6,3]', `Copy: ${JSON.stringify(dsp.log.at(-1))}`);
+midi(0xB0, 119, 127); midi(0x90, padFor(6, 3), 100); midi(0xB0, 119, 0);
+check(dsp.clips[6][3] === 0, 'Delete + pad clears');
+midi(0xB0, 54, 127); midi(0xB0, 63, 127);
+check(ui.state().sceneBank === 1 && ui.state().trackBank === 1, 'arrows page the grid');
+midi(0x90, padFor(9, 5), 100);
+check(ui.state().track === 9 && dsp.edits[9] === 5, `bank 2 pad selects track 10 clip 6: track ${ui.state().track} edit ${dsp.edits[9]}`);
+midi(0xB0, 55, 127); midi(0xB0, 62, 127);
+dsp.play = 1;
+midi(0xB0, 49, 127); midi(0xB0, 85, 127); midi(0xB0, 49, 0);
+check(JSON.stringify(dsp.log.at(-1)) === '["stopall"]', 'Shift + Play stops all clips');
+dsp.play = 0;
+for (let i = 0; i < 300; i++) globalThis.tick();          /* draw grid with blinking */
+midi(0xB0, 71, 1); ticks(8);                               /* knob in clip mode shows the page briefly */
+midi(0xB0, 58, 127); midi(0xB0, 58, 0);
+check(!ui.state().clipMode, 'Loop leaves clip mode');
+jogTo(9);
+midi(0xB0, 76, 1);                                          /* CLIP page knob 6 = launch quantize */
+check(dsp.lq === 4, `launch quantize 2 bars: ${dsp.lq}`);
 
 /* shift + pad selects track and pulls its data */
 midi(0xB0, 49, 127); midi(0x90, 72, 100); midi(0xB0, 49, 0);

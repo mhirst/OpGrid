@@ -155,6 +155,23 @@ void  og_debug_log(og_t *g, int enable);           /* also clears the log */
 int   og_debug_events(const og_t *g, const og_event_t **out);
 int   og_debug_voice_param(const og_t *g, int track, int pid); /* newest voice, -1 none */
 
+/* Clips and scenes. Step/lock/clip-setting calls above act on the track's
+ * EDIT clip, which is independent of the clip that is playing. */
+enum { OG_CLIP_EMPTY = 0, OG_CLIP_STOPPED, OG_CLIP_QUEUED, OG_CLIP_PLAYING, OG_CLIP_STOPPING };
+#define OG_LAUNCH_QS 6          /* off, 1 step, 1 beat, 1 bar, 2 bars, 4 bars */
+void  og_clip_launch(og_t *g, int track, int clip);
+void  og_track_stop(og_t *g, int track);
+void  og_scene_launch(og_t *g, int scene);
+void  og_stop_all(og_t *g);
+void  og_set_launch_quant(og_t *g, int q);
+int   og_get_launch_quant(const og_t *g);
+int   og_clip_state(const og_t *g, int track, int clip);
+int   og_playing_clip(const og_t *g, int track);
+void  og_set_edit_clip(og_t *g, int track, int clip);
+int   og_get_edit_clip(const og_t *g, int track);
+void  og_clip_copy(og_t *g, int st, int sc, int dt, int dc);
+void  og_clip_clear(og_t *g, int track, int clip);
+
 /* Effects, solo, MIDI out. */
 void  og_set_fx(og_t *g, int id, int value);
 int   og_get_fx(const og_t *g, int id);

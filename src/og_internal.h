@@ -72,7 +72,11 @@ typedef struct {
     uint8_t   length;           /* 1..64 */
     uint8_t   speed;            /* index into speed table */
     uint8_t   swing;            /* 50..80 % */
+    uint8_t   used;             /* has been edited: shows as a clip */
 } og_clip_t;
+
+#define OG_Q_NONE  -2           /* og_trackseq_t.queued: nothing queued */
+#define OG_Q_STOP  -1           /*                       stop the track */
 
 typedef struct {
     double   pos;               /* position in steps since play started */
@@ -80,7 +84,10 @@ typedef struct {
     int      pre;               /* result of the last conditional step */
     int      last_ok;           /* this step's condition (ratchets reuse it) */
     int      mute;
-    int      clip;              /* active clip index */
+    int      clip;              /* playing clip, -1 = stopped */
+    int      queued;            /* OG_Q_NONE, OG_Q_STOP or a clip index */
+    double   queue_at;          /* global step position to switch at */
+    int      edit;              /* clip the UI edits (steps, locks, settings) */
 } og_trackseq_t;
 
 typedef struct {
@@ -124,6 +131,8 @@ struct og {
     og_noteoff_t  offs[OG_NOTEOFFS];
     int      playing;
     int      fill;
+    double   gpos;              /* global position in steps (1x speed) */
+    int      launch_q;          /* launch quantize index */
     int      solo[OG_TRACKS];
     float    lfo_free[OG_TRACKS][OG_LFOS];  /* free-running LFO phases */
     float    lfo_free_rnd[OG_TRACKS][OG_LFOS];
