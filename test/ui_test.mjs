@@ -48,6 +48,7 @@ const dsp = {
     clips: Array.from({ length: 16 }, () => [3, 0, 0, 0, 0, 0, 0, 0]),   /* states, track-major */
     edits: new Array(16).fill(0), lq: 3, log: [],
     rec: [0, 0, -1, 1, 0, 1], cdumps: new Map(),
+    songs: Array.from({ length: 8 }, () => ({ rows: [], loop: 1 })), sstat: [0, 0, 0, 0, 0, 0],
 };
 const reset = s => [0, 60, 0, 0, 0, 100, 4, 1, 0, 0];
 const ni = v => `${v}`.split(' ').map(Number);
@@ -84,11 +85,26 @@ function dspSet(k, v) {
     case 'tpset': { const vals = `${v}`.split(' ')[1].split(',').map(Number); dsp.params[a[0]] = vals; break; }
     case 'cload': { const parts = `${v}`.split(' '); dsp.cdumps.set(`${parts[0]}:${parts[1]}`, parts[2]);
         dsp.clips[+parts[0]][+parts[1]] = Math.max(1, dsp.clips[+parts[0]][+parts[1]]); break; }
+    case 'sins': { const sg = dsp.songs[a[0]]; const row = a[2] >= 0
+            ? { scene: a[2], bars: 4, reps: 1, tempo: 0, swing: 0, mutes: 0, clips: new Array(16).fill(a[2]) }
+            : { ...(sg.rows[a[1] - 1] || { scene: 0, bars: 4, reps: 1, tempo: 0, swing: 0, mutes: 0, clips: new Array(16).fill(-1) }) };
+        sg.rows.splice(a[1], 0, row); dsp.log.push(['sins', ...a]); break; }
+    case 'sdel': dsp.songs[a[0]].rows.splice(a[1], 1); dsp.log.push(['sdel', ...a]); break;
+    case 'srow': { const r = dsp.songs[a[0]].rows[a[1]]; const key = ['scene', 'bars', 'reps', 'tempo', 'swing', 'mutes'][a[2]];
+        r[key] = a[3]; if (a[2] === 0) r.clips = new Array(16).fill(a[3]); dsp.log.push(['srow', ...a]); break; }
+    case 'sloop': dsp.songs[a[0]].loop = a[1]; break;
+    case 'song': dsp.sstat[0] = a[0]; if (a[0]) { dsp.sstat[1] = a[1]; dsp.sstat[2] = a[2]; } dsp.log.push(['song', ...a]); break;
+    case 'sjump': dsp.log.push(['sjump', a[0]]); break;
+    case 'capture': dsp.sstat[5] = a[0]; if (a[0]) dsp.songs[a[1]].rows = []; dsp.log.push(['capture', ...a]);
+        if (!a[0]) dsp.songs[dsp.capDest ?? 0].rows.push({ scene: -1, bars: 2, reps: 1, tempo: 0, swing: 0, mutes: 0, clips: new Array(16).fill(1) });
+        if (a[0]) dsp.capDest = a[1]; break;
+    case 'sload': { const parts = `${v}`.split(' '); dsp.songs[+parts[0]].rows = JSON.parse(Buffer.from(parts[1], 'hex').toString()); break; }
     case 'reset':
         dsp.params = Array.from({ length: 16 }, () => new Array(64).fill(0));
         dsp.clips = Array.from({ length: 16 }, () => [3, 0, 0, 0, 0, 0, 0, 0]);
         dsp.cdumps = new Map(); dsp.tempo = 120; dsp.fx = dsp.fx.map(() => 0); dsp.play = 0;
-        dsp.mute.fill(0); dsp.solo.fill(0); dsp.log.push(['reset']); break;
+        dsp.mute.fill(0); dsp.solo.fill(0); dsp.log.push(['reset']);
+        dsp.songs = Array.from({ length: 8 }, () => ({ rows: [], loop: 1 })); break;
     case 'sf': dsp.steps[a[0]][a[1]][a[2]] = a[3]; break;
     case 'sclr': dsp.steps[a[0]][a[1]] = reset();
         for (const key of [...dsp.locks[a[0]].keys()]) if (key.startsWith(`${a[1]}:`)) dsp.locks[a[0]].delete(key);
@@ -123,6 +139,12 @@ function dspGet(k) {
     if (k === 'edits') return dsp.edits.join('');
     if (k === 'lq') return `${dsp.lq}`;
     if (k === 'rec') return dsp.rec.join(',');
+    if (k === 'sstat') return dsp.sstat.join(',');
+    if (k === 'slens') return dsp.songs.map(x => x.rows.length).join(',');
+    if ((m = k.match(/^srow:(\d+):(\d+)$/))) { const r = dsp.songs[+m[1]].rows[+m[2]];
+        return r ? [r.scene, r.bars, r.reps, r.tempo, r.swing, r.mutes, ...r.clips].join(',') : null; }
+    if ((m = k.match(/^sloop:(\d+)$/))) return `${dsp.songs[+m[1]].loop}`;
+    if ((m = k.match(/^sdump:(\d+)$/))) return Buffer.from(JSON.stringify(dsp.songs[+m[1]].rows)).toString('hex');
     if ((m = k.match(/^cdump:(\d+):(\d+)$/))) return dsp.cdumps.get(`${m[1]}:${m[2]}`) || '10043200' + '00'.repeat(20);
     if (k === 'mix') return dsp.mute.join('') + dsp.solo.join('');
     if (k === 'sync') return `${dsp.sync}`;
@@ -421,6 +443,59 @@ check(!ui.state().recArmed && dsp.rec[0] === 0, 'Rec disarms');
 midi(0xB0, 85, 127);                                        /* stop */
 check(dsp.play === 0, 'stopped');
 
+/* ---- milestone 7: song mode ---- */
+dsp.play = 0;
+midi(0xB0, 49, 127); midi(0xB0, 58, 127); midi(0xB0, 49, 0);
+check(ui.state().songView, 'Shift+Loop opens the song view');
+ticks(8);
+midi(0xB0, 3, 127);                                          /* click "+ ADD ROW" on an empty song */
+check(logHas('sins', 0, 0, 0) && ui.state().songRows.length === 1, `add first row from scene 1: ${JSON.stringify(dsp.log.slice(-2))}`);
+midi(0x90, 68 + 24 + 2, 100);                                /* top-row pad 3 = scene 3 */
+check(ui.state().songRows[0].scene === 2, 'top pads choose the scene');
+midi(0xB0, 72, 3);                                           /* BARS +3 */
+check(ui.state().songRows[0].bars === 5, `bars step one per detent: ${ui.state().songRows[0].bars}`);
+midi(0xB0, 73, 1);                                           /* REPS +1 */
+midi(0xB0, 74, 1);                                           /* TMPO from OFF -> current tempo */
+check(ui.state().songRows[0].reps === 2 && ui.state().songRows[0].tempo >= 30, `reps/tempo: ${JSON.stringify(ui.state().songRows[0])}`);
+midi(0x90, 68 + 4, 100);                                     /* bottom pad 5: mute track 5 in this row */
+check(ui.state().songRows[0].mutes === 16, `row mutes: ${ui.state().songRows[0].mutes}`);
+midi(0xB0, 60, 127); midi(0xB0, 60, 0);                      /* Copy = duplicate row */
+check(ui.state().songRows.length === 2 && ui.state().songSel === 1, 'Copy duplicates the row');
+midi(0xB0, 119, 127); midi(0xB0, 119, 0);                    /* Delete removes it */
+check(ui.state().songRows.length === 1, 'Delete removes the row');
+midi(0xB0, 77, 127);                                         /* LOOP off */
+check(dsp.songs[0].loop === 0, 'loop off');
+midi(0xB0, 14, 127);                                         /* jog back to row 1 */
+ticks(8);
+midi(0xB0, 85, 127);                                         /* Play = song from the selected row */
+check(logHas('song', 1, 0, 0) && ui.state().playing, `play starts the song: ${JSON.stringify(dsp.log.slice(-3))}`);
+dsp.play = 1; ticks(20);
+check(ui.state().songOn, 'UI sees song mode running');
+midi(0xB0, 3, 127);
+check(logHas('sjump', 0), 'jog click jumps while the song plays');
+/* clip grid launches are off while the song plays */
+midi(0xB0, 58, 127); midi(0xB0, 58, 0);
+sets.length = 0;
+midi(0x90, padFor(0, 1), 100);
+check(!sets.some(x => x[0] === 'launch'), 'no launching from the grid in song mode');
+midi(0xB0, 58, 127); midi(0xB0, 58, 0);
+midi(0xB0, 85, 127); dsp.play = 0; dsp.sstat[0] = 0;            /* stop */
+/* capture into the first empty song */
+midi(0xB0, 52, 127);
+check(logHas('capture', 1, 1) && ui.state().capturing, `capture starts into song 2: ${JSON.stringify(dsp.log.slice(-2))}`);
+ticks(20);
+midi(0xB0, 52, 127);
+check(logHas('capture', 0) && !ui.state().capturing && ui.state().songRows.length === 1, 'capture stops and shows the captured song');
+midi(0xB0, 85, 127); midi(0xB0, 85, 127); dsp.play = 0;
+midi(0xB0, 49, 127); midi(0xB0, 58, 127); midi(0xB0, 49, 0);
+check(!ui.state().songView && logHas('song', 0), 'Shift+Loop leaves song mode');
+
+/* regression: FILTER page knob 1 (cutoff, 0-127) must use acceleration */
+jogTo(2);
+const before = dsp.params[ui.state().track][16];
+midi(0xB0, 71, 5);
+check(dsp.params[ui.state().track][16] === Math.min(127, before + 5), `cutoff knob accelerates (${before} -> ${dsp.params[ui.state().track][16]})`);
+
 /* ---- milestone 6: projects ---- */
 dsp.params[3][16] = 77; dsp.fx[4] = 55; dsp.tempo = 101; dsp.clips[3][2] = 1;
 dsp.cdumps.set('3:2', 'deadbeef00');
@@ -454,6 +529,7 @@ midi(0xB0, 3, 127); midi(0xB0, 3, 127);
 ticks(200);
 check(dsp.params[3][16] === 77 && dsp.fx[4] === 55 && dsp.tempo === 101, `load restores params/fx/tempo: ${dsp.params[3][16]} ${dsp.fx[4]} ${dsp.tempo}`);
 check(dsp.cdumps.get('3:2') === 'deadbeef00', 'load restores clips');
+check(dsp.songs[0].rows.length === 1 && dsp.songs[1].rows.length === 1, `load restores songs: ${dsp.songs.map(x => x.rows.length)}`);
 
 /* autosave after ~2 minutes when something changed, and on unload */
 jogTo(0);

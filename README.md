@@ -2,7 +2,7 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module.
 
-**Status: milestone 6 of 8** — FM Poly engine, 12-voice pool, 16-track step sequencer (step locks, conditions, micro-timing, ratchets, chords, swing), 3 LFOs per track, shared delay/reverb/chorus, master compressor, mixer, MIDI out, 8 clips per track with a launch grid and scenes, live recording with undo, and project save/load with autosave. No song mode yet.
+**Status: milestone 7 of 8** — FM Poly engine, 12-voice pool, 16-track step sequencer (step locks, conditions, micro-timing, ratchets, chords, swing), 3 LFOs per track, shared delay/reverb/chorus, master compressor, mixer, MIDI out, 8 clips per track with a launch grid and scenes, live recording with undo, project save/load with autosave, and song mode with performance capture. Remaining: more machines (FM Perc, Morph, Stack) and polish.
 
 ## Build and install
 
@@ -30,6 +30,8 @@ Requires Schwung installed on the Move.
 | Shift + Rec | Click: OFF / COUNT-IN / ON |
 | Undo | Undo the last recording take |
 | Menu | Project menu (jog to choose, jog click to select) |
+| Shift + Loop | Song view / song mode on / off |
+| Capture | Capture a live performance as a song |
 | Pads | Play the selected track (rows are a fourth apart) |
 | Shift + pad (bottom 16) | Select track 1–16 |
 | Mute + pad (bottom 16) | Mute / unmute a track |
@@ -67,9 +69,27 @@ Launch quantize (CLIP page, QUAN): off, 1 step, 1 beat, 1 bar (default), 2 bars,
 - **New clip:** while armed, tap an empty slot in the clip grid. It launches on the next launch point and records; tap it again to set its length to whole bars (1–4). It stops growing by itself at 4 bars.
 - **Undo** restores the clip from before the take (one level).
 
+### Song mode (Shift + Loop)
+
+A song is up to 64 rows; 8 songs per project. Each row says which clip every track plays (from a scene, or any mix when captured), which tracks are muted, for how many bars, how many times, and optionally a tempo and a swing for all tracks.
+
+| Control | Action |
+|---|---|
+| Jog | Choose a row (the last line adds a row) |
+| Jog click | On "+ ADD ROW": add a row. While the song plays: jump to that row at the next bar |
+| Knobs | SCEN (scene), BARS (1–64), REPS (1–16), TMPO (OFF or BPM), SWNG (OFF or 50–80%), SONG (1–8), LOOP |
+| Top pad row | Set the row's scene (1–8) |
+| Bottom 16 pads | Mute / unmute a track in the row |
+| Copy / Delete | Duplicate / delete the row |
+| Play | Play the song from the selected row |
+
+While the song plays, the clip grid shows what is playing but does not launch; Shift + Loop returns to live mode. A song without LOOP stops every track at its end.
+
+**Capture:** press Capture and launch clips, stop tracks and mute live; every bar is recorded, and changes become new rows. Press Capture again to finish. It records into the shown song if empty, else the first empty song.
+
 ### Projects
 
-**Menu** opens: SAVE (current name), SAVE AS NEW, NEW PROJECT, and LOAD for each saved project. NEW and LOAD ask for a second click. Projects are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`, and reopens from it next time.
+**Menu** opens: SAVE (current name), SAVE AS NEW, NEW PROJECT, and LOAD for each saved project. NEW and LOAD ask for a second click. Projects (including songs) are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`, and reopens from it next time.
 
 ### Mixer mode (tap Mute)
 
@@ -121,6 +141,7 @@ When an operator other than 1 is heard (a carrier), its LVL knob sets its volume
 - `src/og_seq.c` — sequencer, runs every 16 samples inside the audio callback
 - `src/og_fx.c` — delay, reverb, chorus, master bus
 - `src/og_rec.c` — recording, count-in/click, undo, reset, clip serialization
+- `src/og_song.c` — song rows, bar-accurate song playback, performance capture
 - `src/og_plugin.c` — Schwung plugin API v2 glue and param protocol
 - `src/ui.js` — screen, pads, knobs, LEDs
-- `test/` — C engine, sequencer, effects, clip and recording tests (incl. a 10-minute drift test and a 20 s max-feedback stability test), Node UI tests with a fake host, fake DSP and in-memory filesystem
+- `test/` — C engine, sequencer, effects, clip, recording and song tests (incl. a 10-minute drift test and a 20 s max-feedback stability test), Node UI tests with a fake host, fake DSP and in-memory filesystem

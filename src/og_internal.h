@@ -97,6 +97,22 @@ typedef struct {
 } og_noteoff_t;
 
 #define OG_NOTEOFFS 128
+/* positions accumulate float error: an event within OG_EPS steps of a tick's
+ * end belongs to the next tick, the same rule everywhere */
+#define OG_EPS 1e-6
+
+typedef struct {
+    int8_t   clips[OG_TRACKS];  /* -1 = stop */
+    uint16_t mutes;
+    uint8_t  bars, reps;        /* 1..64, 1..16 */
+    uint16_t tempo;             /* 0 = keep, else 30..300 */
+    uint8_t  swing;             /* 0 = clips' own, else 50..80 */
+} og_row_t;
+
+typedef struct {
+    og_row_t rows[OG_SONG_ROWS];
+    uint8_t  len, loop;
+} og_song_t;
 #define OG_DELAY_MAX_S 2.0f
 
 /* per-tick mix buses */
@@ -133,6 +149,13 @@ struct og {
     int      fill;
     double   gpos;              /* global position in steps (1x speed) */
     int      launch_q;          /* launch quantize index */
+
+    /* song mode */
+    og_song_t songs[OG_SONGS];
+    int      song_on, song, song_row, song_bar, song_rep, song_jump, song_start_pending;
+    int      swing_override;    /* 0 = none */
+    int      capturing, cap_song;
+    long     last_bar;          /* last bar boundary processed */
 
     /* recording */
     int      rec, rec_track, rec_quant, rec_mode, click;
@@ -175,6 +198,8 @@ void og__rec_cross(og_t *g, int track, double start, double end);   /* replace-m
 void og__click_beats(og_t *g, double gs, double ge);
 void og__click_render(og_t *g, float *l, float *r, int n);
 void og__clip_reset(og_clip_t *c);
+void og__song_init(og_t *g);
+void og__song_bar(og_t *g, double gs, double ge);   /* bar boundaries in this tick */
 int  og__fx_init(og_t *g);
 void og__fx_free(og_t *g);
 void og__fx_process(og_t *g, const og_bus_t *b, float *out_l, float *out_r, int n);

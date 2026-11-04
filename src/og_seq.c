@@ -93,6 +93,7 @@ void og_play(og_t *g, int on) {
     if (on == g->playing) return;
     if (on) {
         g->gpos = 0.0;
+        g->last_bar = -1;
         for (int t = 0; t < OG_TRACKS; t++) {
             og_trackseq_t *ts = &g->ts[t];
             if (ts->queued != OG_Q_NONE) {   /* queued while stopped: take effect now */
@@ -417,12 +418,13 @@ void og__seq_advance(og_t *g, int frames) {
     }
     double gs = g->gpos, ge = gs + (double)frames / step_samples;
     og__click_beats(g, gs, ge);
+    og__song_bar(g, gs, ge);
 
     for (int t = 0; t < OG_TRACKS; t++) {
         og_trackseq_t *ts = &g->ts[t];
 
         /* a queued launch or stop lands inside this tick */
-        if (ts->queued != OG_Q_NONE && ts->queue_at < ge) {
+        if (ts->queued != OG_Q_NONE && ts->queue_at < ge - OG_EPS) {
             double b = ts->queue_at > gs ? ts->queue_at : gs;
             if (ts->queued == OG_Q_STOP) {
                 offs_flush(g, t);
@@ -454,19 +456,20 @@ void og__seq_advance(og_t *g, int frames) {
         og_clip_t *c = play_clip(g, t);
         double start = ts->pos;
         double end = start + (double)frames / step_samples * og_speed_mul(c->speed);
-        og__rec_cross(g, t, start, end);
+        og__rec_cross(g, t, start - OG_EPS, end - OG_EPS);
         if (g->rec_grow == t && end >= (double)OG_STEPS) g->rec_grow = -1;   /* full 4 bars: done growing */
 
         for (int i = 0; i < OG_NOTEOFFS; i++) {
             og_noteoff_t *o = &g->offs[i];
-            if (o->used && o->track == t && o->at < end) {
+            if (o->used && o->track == t && o->at < end - OG_EPS) {
                 og_note_off(g, t, o->note);
                 log_ev(g, t, o->note, 0, 0);
                 o->used = 0;
             }
         }
 
-        double swing = 2.0 * (double)c->swing / 100.0 - 1.0;
+        int sw = g->swing_override ? g->swing_override : c->swing;
+        double swing = 2.0 * (double)sw / 100.0 - 1.0;
         long n0 = (long)floor(start) - 1, n1 = (long)floor(end) + 1;
         if (n0 < 0) n0 = 0;
         for (long n = n0; n <= n1; n++) {
@@ -477,7 +480,7 @@ void og__seq_advance(og_t *g, int frames) {
             int rat = st->rat < 1 ? 1 : st->rat;
             for (int j = 0; j < rat; j++) {
                 double at = base + (double)j / (double)rat;
-                if (at >= start && at < end) fire(g, t, n, s, j, at);
+                if (at >= start - OG_EPS && at < end - OG_EPS) fire(g, t, n, s, j, at);
             }
         }
         ts->pos = end;

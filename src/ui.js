@@ -27,7 +27,7 @@ const PAD0 = 68, PADS = 32, STEP0 = 16, STEPS = 16;
 const KNOB0 = 71, JOG = 14;
 const CC_SHIFT = 49, CC_DOWN = 54, CC_UP = 55, CC_LEFT = 62, CC_RIGHT = 63;
 const CC_PLAY = 85, CC_MUTE = 88, CC_DELETE = 119, CC_COPY = 60, CC_LOOP = 58;
-const CC_REC = 86, CC_UNDO = 56, CC_MENU = 50, JOG_CLICK = 3;
+const CC_REC = 86, CC_UNDO = 56, CC_MENU = 50, JOG_CLICK = 3, CC_CAPTURE = 52;
 const WHITE = 120, GREY = 124, DARK = 119, OFF = 0, LED_BRIGHT = 127, LED_DIM = 16;
 
 /* ---------- tracks ---------- */
@@ -434,6 +434,7 @@ function editClipSelect(t, c) {
 function onClipPad(i, on) {
     if (!on) return;
     pullClips();                         /* decide on fresh slot states */
+    if (songOn && !shift && !deleteHeld && !copyHeld) { showFlash('SONG MODE: SHIFT+LOOP'); return; }
     const row = Math.floor(i / 8), col = i % 8;
     const t = trackBank * 8 + col, c = sceneBank * 4 + (3 - row);
     if (deleteHeld) {
@@ -536,6 +537,7 @@ function padToNote(i) {
 }
 
 function onPad(i, vel, on) {
+    if (songView && !clipMode) { onSongPad(i, on); return; }
     if (clipMode) { onClipPad(i, on); return; }
     if (mixer) {
         /* bottom 16 pads: mute (Shift = solo); top 16: select track */
@@ -592,17 +594,19 @@ globalThis.onMidiMessageInternal = function (data) {
 
     if (d1 >= KNOB0 && d1 < KNOB0 + 8) {
         const knob = d1 - KNOB0;
+        if (menuOpen) return;
         let small;
-        if (mixer) small = false;
+        if (songView) small = knob !== 3;
+        else if (mixer) small = false;
         else if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && PARAMS[pid][2] < 40; }
         else if (page === PAGE_STEP) small = knob !== 1 && knob !== 2;
         else if (page === PAGE_CLIP) small = knob === 1 || knob >= 4;
-        if (menuOpen) return;
         else small = FX[(page === PAGE_FX2 ? 8 : 0) + knob][1] < 40;
         const raw = small ? decodeDelta(d2) : decodeAcceleratedDelta(d2, knob);
         const delta = shift && !small ? Math.sign(raw) : raw;
         if (!delta) return;
-        if (mixer) editMixer(knob, delta);
+        if (songView) editSongRow(knob, delta);
+        else if (mixer) editMixer(knob, delta);
         else if (page < SOUND_PAGES) editSound(knob, delta);
         else if (page === PAGE_STEP) editStep(knob, delta);
         else if (page === PAGE_CLIP) editClip(knob, delta);
@@ -620,10 +624,20 @@ globalThis.onMidiMessageInternal = function (data) {
             if (!muteUsed && !shift) { mixer = !mixer; if (mixer) { clipMode = false; pullMix(); } }
         }
         updateFill(); dirty = true; break;
-    case CC_DELETE: deleteHeld = press; break;
-    case CC_COPY: copyHeld = press; if (!press) copySrc = null; dirty = true; break;
+    case CC_DELETE:
+        deleteHeld = press;
+        if (press && songView) { songDeleteRow(); }
+        break;
+    case CC_COPY:
+        copyHeld = press; if (!press) copySrc = null;
+        if (press && songView) songDuplicateRow();
+        dirty = true; break;
     case CC_MENU: if (press) toggleMenu(); break;
-    case JOG_CLICK: if (press && menuOpen) menuSelect(); break;
+    case JOG_CLICK:
+        if (press && menuOpen) menuSelect();
+        else if (press && songView) songClick();
+        break;
+    case CC_CAPTURE: if (press) toggleCapture(); break;
     case CC_UNDO:
         if (press) {
             setParam('undo', 1);
@@ -647,17 +661,29 @@ globalThis.onMidiMessageInternal = function (data) {
         dirty = true;
         break;
     case CC_LOOP:
-        if (press && !shift) { clipMode = !clipMode; if (clipMode) { mixer = false; pullClips(); } dirty = true; }
+        if (press && shift) { toggleSongView(); break; }
+        if (press) { clipMode = !clipMode; if (clipMode) { mixer = false; pullClips(); } dirty = true; }  /* song view stays underneath */
         break;
     case CC_PLAY:
         if (press && shift) { setParam('stopall', 1); pullClips(); dirty = true; break; }
         if (press) {
             if (playing || countingIn) { playing = false; countingIn = false; setParam('play', 0); }
-            else startTransport();
+            else {
+                if (songView && songRows.length) setParam('song', `1 ${song} ${Math.min(songSel, songRows.length - 1)}`);
+                startTransport();
+            }
+            pullSong();
             dirty = true;
         }
         break;
-    case JOG: { const dl = decodeDelta(d2); if (dl) { if (menuOpen) menuMove(dl); else changePage(dl); } break; }
+    case JOG: {
+        const dl = decodeDelta(d2);
+        if (!dl) break;
+        if (menuOpen) menuMove(dl);
+        else if (songView) { songSel = clamp(songSel + dl, 0, songRows.length); dirty = true; }
+        else changePage(dl);
+        break;
+    }
     case CC_LEFT: if (press) {
         if (clipMode) { trackBank = 0; dirty = true; }
         else if (mixer) { mixBank = 0; dirty = true; } else changePage(-1);
@@ -726,7 +752,16 @@ function clipPadColor(i) {
     }
 }
 
+function songPadColor(i) {
+    const row = songRows[songSel];
+    if (!row) return OFF;
+    if (i < 16) return (row.mutes >> i) & 1 ? trackDim(i) : row.clips[i] >= 0 ? trackBright(i) : DARK;
+    if (i >= 24) return row.scene === i - 24 ? WHITE : GREY;
+    return OFF;
+}
+
 function padColor(i) {
+    if (songView && !clipMode) return songPadColor(i);
     if (clipMode) return clipPadColor(i);
     if (mixer) {
         if (i < 16) return solo[i] ? WHITE : clipInfo[i].mute ? trackDim(i) : trackBright(i);
@@ -752,6 +787,7 @@ function desiredLeds() {
     out.push(['c', CC_LOOP, clipMode ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_COPY, copyHeld ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_REC, recArmed ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_CAPTURE, capturing ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_MENU, menuOpen ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_UNDO, LED_DIM]);
     out.push(['c', CC_DELETE, deleteHeld ? LED_BRIGHT : LED_DIM]);
@@ -801,6 +837,7 @@ function drawHeader() {
 function drawScreen() {
     clear_screen();
     if (menuOpen || job) { drawMenu(); return; }
+    if (songView && !clipMode) { drawSong(); return; }
     drawHeader();
     const hs = firstHeld();
     const hot = k => k === touchedKnob && tickCount < touchedUntil;
@@ -901,6 +938,159 @@ function drawMixer(hot) {
     }
 }
 
+/* ---------- song mode ---------- */
+/* row fields (must match OG_R_*): scene, bars, reps, tempo, swing, mutes, clip0..15 */
+const SONGS = 8, SONG_ROWS = 64, R_SCENE = 0, R_BARS = 1, R_REPS = 2, R_TEMPO = 3, R_SWING = 4, R_MUTES = 5, R_CLIP0 = 6;
+let songView = false, song = 0, songSel = 0, songRows = [], songLoop = 1, songLens = new Array(SONGS).fill(0);
+let songOn = false, songRow = 0, songBar = 0, songRep = 0, capturing = false;
+const SONG_KNOBS = ['SCEN', 'BARS', 'REPS', 'TMPO', 'SWNG', 'SONG', 'LOOP'];
+
+function pullSong() {
+    const st = ints(getParam('sstat'));
+    if (st.length >= 6 && st.every(Number.isFinite)) {
+        const changed = songOn !== (st[0] === 1) || songRow !== st[2] || songBar !== st[3] || songRep !== st[4];
+        songOn = st[0] === 1; songRow = st[2]; songBar = st[3]; songRep = st[4];
+        if (capturing && st[5] === 0) pullSongRows();
+        capturing = st[5] === 1;
+        if (songOn) song = st[1];
+        if (changed) dirty = true;
+    }
+}
+
+function pullSongRows() {
+    const lens = ints(getParam('slens'));
+    if (lens.length === SONGS && lens.every(Number.isFinite)) songLens = lens;
+    songRows = [];
+    for (let r = 0; r < songLens[song]; r++) {
+        const f = ints(getParam(`srow:${song}:${r}`));
+        if (f.length < R_CLIP0 + TRACKS) break;
+        songRows.push({ scene: f[R_SCENE], bars: f[R_BARS], reps: f[R_REPS], tempo: f[R_TEMPO],
+            swing: f[R_SWING], mutes: f[R_MUTES], clips: f.slice(R_CLIP0, R_CLIP0 + TRACKS) });
+    }
+    songLoop = parseInt(getParam(`sloop:${song}`), 10) ? 1 : 0;
+    songSel = clamp(songSel, 0, songRows.length);
+    dirty = true;
+}
+
+function toggleSongView() {
+    songView = !songView;
+    if (songView) { clipMode = false; mixer = false; pullSongRows(); pullSong(); }
+    else { setParam('song', 0); songOn = false; }       /* leaving the song view = live mode */
+    dirty = true;
+}
+
+function songAddRow(at, scene) {
+    if (songRows.length >= SONG_ROWS) { showFlash('SONG FULL'); return; }
+    setParam('sins', `${song} ${at} ${scene}`);
+    pullSongRows();
+    songSel = at;
+}
+
+function songClick() {
+    if (songSel >= songRows.length) songAddRow(songRows.length, songRows.length ? -1 : 0);
+    else if (songOn && playing) { setParam('sjump', songSel); showFlash(`JUMP TO ROW ${songSel + 1}`); }
+}
+
+function songDuplicateRow() {
+    if (songSel < songRows.length) songAddRow(songSel + 1, -1);
+    else songAddRow(songRows.length, songRows.length ? -1 : 0);
+}
+
+function songDeleteRow() {
+    if (songSel >= songRows.length) return;
+    setParam('sdel', `${song} ${songSel}`);
+    pullSongRows();
+}
+
+function editSongRow(knob, delta) {
+    touch(knob);
+    if (knob === 5) {                        /* SONG: switch which song is shown */
+        song = clamp(song + delta, 0, SONGS - 1);
+        songSel = 0;
+        pullSongRows();
+        return;
+    }
+    if (knob === 6) {
+        songLoop = clamp(songLoop + delta, 0, 1);
+        setParam('sloop', `${song} ${songLoop}`);
+        return;
+    }
+    const row = songRows[songSel];
+    if (!row || knob > 6) return;
+    let field, val;
+    switch (knob) {
+    case 0: field = R_SCENE; val = clamp((row.scene < 0 ? 0 : row.scene + delta), 0, CLIPS - 1); break;
+    case 1: field = R_BARS; val = clamp(row.bars + delta, 1, 64); break;
+    case 2: field = R_REPS; val = clamp(row.reps + delta, 1, 16); break;
+    case 3: field = R_TEMPO; val = row.tempo === 0 ? (delta > 0 ? Math.round(tempo) : 0) : row.tempo + delta;
+        if (val < 30) val = 0; val = Math.min(300, val); break;
+    default: field = R_SWING; val = row.swing === 0 ? (delta > 0 ? 50 : 0) : row.swing + delta;
+        if (val < 50) val = 0; val = Math.min(80, val); break;
+    }
+    setParam('srow', `${song} ${songSel} ${field} ${val}`);
+    pullSongRows();
+}
+
+function onSongPad(i, on) {
+    if (!on) return;
+    const row = songRows[songSel];
+    if (!row) { if (i >= 24) { songAddRow(songRows.length, i - 24); } return; }
+    if (i < 16) setParam('srow', `${song} ${songSel} ${R_MUTES} ${row.mutes ^ (1 << i)}`);
+    else if (i >= 24) setParam('srow', `${song} ${songSel} ${R_SCENE} ${i - 24}`);
+    pullSongRows();
+}
+
+function toggleCapture() {
+    if (capturing) {
+        setParam('capture', 0);
+        capturing = false;
+        showFlash(`SONG ${song + 1} CAPTURED`);
+        pullSongRows();
+        return;
+    }
+    /* into the shown song if it is empty, else the first empty song */
+    pullSongRows();
+    let dest = songLens[song] === 0 ? song : songLens.findIndex(l => l === 0);
+    if (dest < 0) dest = song;
+    song = dest;
+    setParam('capture', `1 ${dest}`);
+    capturing = true;
+    if (!playing) startTransport();
+    showFlash(`CAPTURING TO SONG ${dest + 1}`);
+}
+
+function drawSong() {
+    fill_rect(0, 0, 128, 10, 1);
+    print(2, 1, `SONG ${song + 1} ${songLoop ? 'LOOP' : 'END'}`, 0);
+    const right = capturing ? 'CAP' : songOn ? `${songRow + 1}:${songBar + 1}` : (playing ? '>' : '.');
+    print(126 - text_width(right), 1, right, 0);
+    const hot = k => k === touchedKnob && tickCount < touchedUntil;
+    if (hot(0) || hot(1) || hot(2) || hot(3) || hot(4) || hot(5) || hot(6)) {
+        const row = songRows[songSel] || {};
+        const vals = [row.scene === undefined ? '--' : row.scene < 0 ? 'MIX' : `S${row.scene + 1}`,
+            `${row.bars ?? '--'}`, `x${row.reps ?? '-'}`, row.tempo ? `${row.tempo}` : 'OFF',
+            row.swing ? `${row.swing}%` : 'OFF', `${song + 1}`, songLoop ? 'ON' : 'OFF'];
+        for (let k = 0; k < 7; k++) drawCell(k, SONG_KNOBS[k], vals[k], null, hot(k), false);
+        return;
+    }
+    const first = clamp(songSel - 2, 0, Math.max(0, songRows.length + 1 - 5));
+    for (let r = 0; r < 5; r++) {
+        const i = first + r, y = 12 + r * 10;
+        if (i > songRows.length) break;
+        let label;
+        if (i === songRows.length) label = songRows.length ? '+ ADD ROW' : '+ ADD ROW (or pad)';
+        else {
+            const row = songRows[i];
+            const sc = row.scene < 0 ? 'MIX' : `S${row.scene + 1}`;
+            label = `${String(i + 1).padStart(2, '0')} ${sc.padEnd(3)} ${row.bars}x${row.reps}` +
+                (row.tempo ? ` ${row.tempo}` : '') + (row.mutes ? ' M' : '');
+            if (songOn && i === songRow) label = `>${label.slice(1)}`;
+        }
+        if (i === songSel) { fill_rect(0, y - 1, 128, 10, 1); print(2, y, label.slice(0, 20), 0); }
+        else print(2, y, label.slice(0, 20), 1);
+    }
+}
+
 /* ---------- transport / recording ---------- */
 function startTransport() {
     if (recArmed && clickMode !== 0) { setParam('countin', 1); countingIn = true; }
@@ -976,6 +1166,11 @@ function startSave(path, name, sync = false) {
             if (hex && hex.length > 8 && hex.slice(6, 8) !== '00') data.tracks[t].clips[c] = hex;
         });
     }
+    data.songs = {};
+    tasks.push(() => {
+        const lens = ints(getParam('slens'));
+        lens.forEach((len, si) => { if (len > 0) { const hex = getParam(`sdump:${si}`); if (hex) data.songs[si] = hex; } });
+    });
     tasks.push(() => {
         ensureDirs();
         const ok = writeAtomic(path, JSON.stringify(data));
@@ -1022,8 +1217,11 @@ function startLoad(path, quiet = false) {
             }
         });
     });
+    for (const [si, hex] of Object.entries(data.songs || {}))
+        tasks.push(() => { if (/^[0-9a-f]+$/i.test(hex)) setParam('sload', `${si} ${hex}`); });
     tasks.push(() => {
         projectName = String(data.name || projectName).slice(0, 16);
+        songView = false; songOn = false; song = 0;
         playing = false; recArmed = false;
         for (let t = 0; t < TRACKS; t++) pullTrack(t);
         pullTransport(); pullFx(); pullMix(); pullClips(); pullRec();
@@ -1150,6 +1348,7 @@ globalThis.tick = function () {
     }
     if (stepsDirty && tickCount % 4 === 0) { pullSteps(track); pullClip(track); }
     if (clipMode && tickCount % 16 === 0) pullClips();
+    if ((songView || songOn || capturing) && tickCount % 16 === 0) pullSong();
     if ((recArmed || countingIn) && tickCount % 16 === 0) {
         pullRec();
         if (countingIn === false && playing === true) dirty = true;
@@ -1177,6 +1376,7 @@ globalThis.__opgrid = {
     clipStates, editClips, LAUNCH_QS,
     state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync, mixer, mixBank,
         clipMode, trackBank, sceneBank, launchQ, recArmed, countingIn, growTrack, recQuant, recMode,
-        clickMode, menuOpen, job: !!job, projectName, projectDirty, menuItems: menuItems.map(m => m.label) }),
+        clickMode, menuOpen, job: !!job, projectName, projectDirty, menuItems: menuItems.map(m => m.label),
+        songView, song, songSel, songRows: JSON.parse(JSON.stringify(songRows)), songLoop, songOn, songRow, capturing }),
     tick: n => { for (let i = 0; i < n; i++) globalThis.tick(); },
 };

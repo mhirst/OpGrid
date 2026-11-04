@@ -195,6 +195,34 @@ int   og_rec_growing(const og_t *g);                   /* track with a growing c
 int   og_undo(og_t *g);                                /* restore the last take; 0 = nothing */
 void  og_reset(og_t *g);                               /* new project: defaults everywhere */
 
+/* Song mode. A song is up to 64 rows; a row says which clip every track
+ * plays (or stop), which tracks are muted, for how many bars, how many
+ * times, and optionally a tempo and a swing for all tracks. */
+#define OG_SONGS         8
+#define OG_SONG_ROWS     64
+enum { OG_R_SCENE = 0,       /* write-only: set every track from a scene (empty slot = stop) */
+       OG_R_BARS, OG_R_REPS, OG_R_TEMPO, OG_R_SWING, OG_R_MUTES,
+       OG_R_CLIP0 };         /* OG_R_CLIP0 + track: clip index or -1 = stop */
+#define OG_R_FIELDS      (OG_R_CLIP0 + OG_TRACKS)
+void  og_song_set(og_t *g, int song, int row, int field, int value);
+int   og_song_get(const og_t *g, int song, int row, int field);
+int   og_song_scene_of(const og_t *g, int song, int row);   /* scene it matches, or -1 (mixed) */
+int   og_song_insert(og_t *g, int song, int at, int scene); /* returns the new row or -1 */
+void  og_song_delete(og_t *g, int song, int row);
+int   og_song_length(const og_t *g, int song);
+void  og_song_set_loop(og_t *g, int song, int on);
+int   og_song_loop(const og_t *g, int song);
+void  og_song_clear(og_t *g, int song);
+void  og_song_mode(og_t *g, int on, int song, int row);    /* on: start at row (now or next bar) */
+int   og_song_on(const og_t *g);
+void  og_song_jump(og_t *g, int row);                       /* at the next bar */
+/* status: on, song, row, bar within the row (0-based), repeat (0-based), capturing */
+void  og_song_status(const og_t *g, int out[6]);
+void  og_capture(og_t *g, int on, int dest_song);           /* record launches as song rows */
+#define OG_SONG_HEX_MAX  (2 * (2 + OG_SONG_ROWS * (OG_TRACKS + 7)))
+int   og_song_dump(const og_t *g, int song, char *out, int out_len);
+int   og_song_load(og_t *g, int song, const char *hex);
+
 /* Clip serialization (for saving): hex text, at most OG_CLIP_HEX_MAX chars + NUL. */
 #define OG_CLIP_HEX_MAX  (2 * (4 + OG_STEPS * 10 + 1 + OG_LOCKS * 3))
 int   og_clip_dump(const og_t *g, int track, int clip, char *out, int out_len);

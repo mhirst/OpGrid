@@ -130,6 +130,7 @@ og_t *og_create(float sample_rate) {
     }
     og__seq_init(g);
     og__rec_init(g);
+    og__song_init(g);
     if (!og__fx_init(g)) { og_destroy(g); return NULL; }
     return g;
 }

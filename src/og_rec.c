@@ -300,6 +300,7 @@ void og_reset(og_t *g) {
     for (int i = 0; i < FX_COUNT; i++) og_set_fx(g, i, og_fx_default(i));
     og__seq_init(g);
     og__rec_init(g);
+    og__song_init(g);
     og_set_tempo(g, 120.0f);
     g->fill = 0;
 }

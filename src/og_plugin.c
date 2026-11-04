@@ -54,6 +54,19 @@
  *   set "cload" "<t> <c> <hex>"            restore a clip from og_clip_dump text
  *   get "rec"        "armed,counting_in,growing_track,quant,mode,click"
  *   get "cdump:<t>:<c>"
+ *
+ * Songs:
+ *   set "song"    "<0|1> <song> <row>"     song mode off / on from a row
+ *   set "sjump"   "<row>"                  jump at the next bar
+ *   set "srow"    "<song> <row> <field> <v>"  (OG_R_*)
+ *   set "sins"    "<song> <at> <scene|-1>" insert a row (-1 = copy the row before)
+ *   set "sdel"    "<song> <row>"   "sloop" "<song> <0|1>"   "sclear" "<song>"
+ *   set "capture" "<0|1> <dest song>"
+ *   set "sload"   "<song> <hex>"
+ *   get "sstat"           "on,song,row,bar,rep,capturing"
+ *   get "slens"           8 comma-separated song lengths
+ *   get "srow:<s>:<r>"    "scene,bars,reps,tempo,swing,mutes,clip0..clip15" (scene -1 = mixed)
+ *   get "sloop:<s>"  "sdump:<s>"
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -200,6 +213,32 @@ static void plug_set(void *inst, const char *key, const char *val) {
             while (*p == ' ') p++;
             og_clip_load(g, a[0], a[1], p);
         }
+    } else if (!strcmp(key, "song")) {
+        int v[3] = {0, 0, 0};
+        if (parse_ints(val, v, 3) >= 1) og_song_mode(g, v[0], v[1], v[2]);
+    } else if (!strcmp(key, "sjump")) {
+        if (parse_ints(val, a, 1) == 1) og_song_jump(g, a[0]);
+    } else if (!strcmp(key, "srow")) {
+        if (parse_ints(val, a, 4) == 4) og_song_set(g, a[0], a[1], a[2], a[3]);
+    } else if (!strcmp(key, "sins")) {
+        if (parse_ints(val, a, 3) == 3) og_song_insert(g, a[0], a[1], a[2]);
+    } else if (!strcmp(key, "sdel")) {
+        if (parse_ints(val, a, 2) == 2) og_song_delete(g, a[0], a[1]);
+    } else if (!strcmp(key, "sloop")) {
+        if (parse_ints(val, a, 2) == 2) og_song_set_loop(g, a[0], a[1]);
+    } else if (!strcmp(key, "sclear")) {
+        if (parse_ints(val, a, 1) == 1) og_song_clear(g, a[0]);
+    } else if (!strcmp(key, "capture")) {
+        int v[2] = {0, 0};
+        if (parse_ints(val, v, 2) >= 1) og_capture(g, v[0], v[1]);
+    } else if (!strcmp(key, "sload")) {
+        if (val && parse_ints(val, a, 1) == 1) {
+            const char *p = val;
+            while (*p == ' ') p++;
+            while (*p && *p != ' ') p++;
+            while (*p == ' ') p++;
+            og_song_load(g, a[0], p);
+        }
     } else if (!strcmp(key, "fx")) {
         if (parse_ints(val, a, 2) == 2) og_set_fx(g, a[0], a[1]);
     } else if (!strcmp(key, "solo")) {
@@ -265,6 +304,27 @@ static int plug_get(void *inst, const char *key, char *buf, int buf_len) {
         if (parse_ints(key + 6, tc, 2) != 2) return -1;
         return og_clip_dump(g, tc[0], tc[1], buf, buf_len);
     }
+    if (!strcmp(key, "sstat")) {
+        int st[6];
+        og_song_status(g, st);
+        return snprintf(buf, (size_t)buf_len, "%d,%d,%d,%d,%d,%d", st[0], st[1], st[2], st[3], st[4], st[5]);
+    }
+    if (!strcmp(key, "slens")) {
+        int w = 0;
+        for (int s2 = 0; s2 < OG_SONGS && w < buf_len - 4; s2++)
+            w += snprintf(buf + w, (size_t)(buf_len - w), s2 ? ",%d" : "%d", og_song_length(g, s2));
+        return w;
+    }
+    if (!strncmp(key, "srow:", 5)) {
+        int sr[2];
+        if (parse_ints(key + 5, sr, 2) != 2) return -1;
+        int w = 0;
+        for (int f = 0; f < OG_R_FIELDS && w < buf_len - 6; f++)
+            w += snprintf(buf + w, (size_t)(buf_len - w), f ? ",%d" : "%d", og_song_get(g, sr[0], sr[1], f));
+        return w;
+    }
+    if (!strncmp(key, "sloop:", 6)) return snprintf(buf, (size_t)buf_len, "%d", og_song_loop(g, atoi(key + 6)));
+    if (!strncmp(key, "sdump:", 6)) return og_song_dump(g, atoi(key + 6), buf, buf_len);
     if (!strcmp(key, "lq")) return snprintf(buf, (size_t)buf_len, "%d", og_get_launch_quant(g));
     if (!strcmp(key, "fx")) {
         int w = 0;

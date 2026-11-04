@@ -1,17 +1,22 @@
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Wpedantic -Iinclude -Isrc
-SRC = src/og_engine.c src/og_seq.c src/og_fx.c src/og_rec.c src/og_plugin.c
+SRC = src/og_engine.c src/og_seq.c src/og_fx.c src/og_rec.c src/og_song.c src/og_plugin.c
 
 .PHONY: test test-c test-ui sanitize arm clean
 
 test: test-c test-ui
 
-test-c: build/engine_test build/seq_test build/fx_test build/clip_test build/rec_test
+test-c: build/engine_test build/seq_test build/fx_test build/clip_test build/rec_test build/song_test
 	./build/engine_test build/demo.wav
 	./build/seq_test build/seq_demo.wav
 	./build/fx_test
 	./build/clip_test
 	./build/rec_test
+	./build/song_test
+
+build/song_test: $(SRC) src/og_engine.h src/og_internal.h test/song_test.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SRC) test/song_test.c -o $@ -lm
 
 build/rec_test: $(SRC) src/og_engine.h src/og_internal.h test/rec_test.c
 	@mkdir -p build
@@ -50,6 +55,9 @@ sanitize:
 	$(CC) -O1 -g -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer \
 		$(SRC) test/rec_test.c -o build/rec_test_san -lm
 	./build/rec_test_san
+	$(CC) -O1 -g -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer \
+		$(SRC) test/song_test.c -o build/song_test_san -lm
+	./build/song_test_san
 
 test-ui:
 	node test/ui_test.mjs
