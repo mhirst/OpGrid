@@ -1,0 +1,17 @@
+{
+    "id": "opgrid",
+    "name": "OpGrid",
+    "abbrev": "OPGR",
+    "version": "0.1.0",
+    "description": "16-track FM groovebox: 4-operator FM voices, step locks, clip launching and song mode",
+    "author": "OpGrid",
+    "ui": "ui.js",
+    "dsp": "dsp.so",
+    "api_version": 2,
+    "component_type": "overtake",
+    "capabilities": {
+        "audio_out": true,
+        "midi_in": true,
+        "suspend_keeps_js": true
+    }
+}
