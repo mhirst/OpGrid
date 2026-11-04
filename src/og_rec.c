@@ -281,7 +281,8 @@ void og_rec_close_clip(og_t *g, int track) {
     og_clip_t *c = &g->clips[track][ts->clip];
     c->length = (uint8_t)(bars * 16);
     /* keep looping in phase: fold the position into the new length */
-    ts->pos = fmod(ts->pos, (double)c->length);
+    /* (no fmod: the cross toolchain's fmod needs a newer glibc than the Move has) */
+    ts->pos -= floor(ts->pos / (double)c->length) * (double)c->length;
 }
 
 /* ---- reset ------------------------------------------------------------ */
