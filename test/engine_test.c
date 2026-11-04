@@ -245,6 +245,10 @@ static void demo(const char *path) {
 }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--dump-seq")) {
+        printf("%d %d %d\n", OG_CONDS, OG_LENS, OG_SPEEDS);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "--dump-params")) {
         for (int p = 0; p < P_COUNT_USED; p++) printf("%d %d\n", og_param_default(p), og_param_max(p));
         return 0;

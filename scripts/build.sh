@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 OUT=build/opgrid
 CFLAGS="-O3 -shared -fPIC -Wall -Wextra -Iinclude -Isrc -mcpu=cortex-a53"
-SRC="src/og_engine.c src/og_plugin.c"
+SRC="src/og_engine.c src/og_seq.c src/og_plugin.c"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"

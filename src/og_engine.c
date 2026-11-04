@@ -5,14 +5,12 @@
  * logs or touches files. Expensive maths (exp/pow/sin) is either tabled at
  * create time or run once per 16-sample control tick, never per sample.
  */
-#include "og_engine.h"
+#include "og_internal.h"
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define SINE_BITS   12
-#define SINE_SIZE   (1 << SINE_BITS)
 #define FADE_LEN    64          /* ~1.5 ms steal fade */
 #define TWO32       4294967296.0f
 
@@ -59,52 +57,6 @@ static const pinfo_t k_pinfo[P_COUNT_USED] = {
                {0, 127}, {60, 127}, {127, 127}, {50, 127},
     /* AMP */  {0, 127}, {70, 127}, {90, 127}, {50, 127}, {0, 127}, {64, 127},
                {100, 127}, {64, 127},
-};
-
-/* ---- state ---------------------------------------------------------- */
-
-enum { ENV_IDLE = 0, ENV_ATT, ENV_DEC, ENV_SUS, ENV_REL };
-
-typedef struct {
-    int   stage;
-    float level;
-} env_t;
-
-typedef struct {
-    int      active;
-    int      track, note, vel;
-    int      gate;
-    uint32_t age;
-
-    uint32_t ph[5];          /* op phases, index 1..4 */
-    float    fb1, fb2;       /* op4 feedback history */
-    float    pitch;          /* current pitch, semitones (glides) */
-    float    target;         /* target pitch */
-
-    env_t    amp, flt;
-    float    mod_env[5];     /* ops 2..4 decay envelopes */
-    float    amp_out;        /* amp gain reached at end of last tick */
-
-    float    ic1[2], ic2[2]; /* SVF state, 2 stages */
-
-    int      fade;           /* >0: fading out for a steal */
-    int      pend_track, pend_note, pend_vel, pend_gate;
-    int      pending;
-} voice_t;
-
-struct og {
-    float    sr;
-    float    inv_sr;
-    int      params[OG_TRACKS][OG_PARAMS];
-    float    last_pitch[OG_TRACKS];
-    float    master;
-    uint32_t clock;          /* voice age counter */
-    voice_t  v[OG_VOICES];
-
-    float    sine[SINE_SIZE + 1];
-    float    att_inc[128];   /* attack increment per control tick */
-    float    dec_coef[128];  /* exponential coef per control tick */
-    float    pan_l[128], pan_r[128];
 };
 
 /* ---- helpers -------------------------------------------------------- */
@@ -165,6 +117,7 @@ og_t *og_create(float sample_rate) {
         for (int p = 0; p < P_COUNT_USED; p++) g->params[t][p] = k_pinfo[p].def;
         g->last_pitch[t] = -1.0f;
     }
+    og__seq_init(g);
     return g;
 }
 
@@ -173,12 +126,21 @@ void og_destroy(og_t *g) { free(g); }
 /* ---- params --------------------------------------------------------- */
 
 void og_set_param(og_t *g, int track, int pid, int value) {
-    if (!g || track < 0 || track >= OG_TRACKS || pid < 0 || pid >= OG_PARAMS) return;
-    g->params[track][pid] = clampi(value, 0, og_param_max(pid));
+    if (!g || track < 0 || track >= OG_TRACKS || pid < 0 || pid >= P_COUNT_USED) return;
+    value = clampi(value, 0, og_param_max(pid));
+    g->params[track][pid] = value;
+    /* sounding voices follow base edits, except where a step lock holds */
+    for (int i = 0; i < OG_VOICES; i++) {
+        voice_t *v = &g->v[i];
+        if (v->active && v->track == track && !(v->lockmask & (1ull << pid)))
+            v->p[pid] = value;
+        if (v->pending && v->pend_track == track && !(v->pend_lockmask & (1ull << pid)))
+            v->pend_p[pid] = value;
+    }
 }
 
 int og_get_param(const og_t *g, int track, int pid) {
-    if (!g || track < 0 || track >= OG_TRACKS || pid < 0 || pid >= OG_PARAMS) return 0;
+    if (!g || track < 0 || track >= OG_TRACKS || pid < 0 || pid >= P_COUNT_USED) return 0;
     return g->params[track][pid];
 }
 
@@ -186,6 +148,15 @@ void og_set_master(og_t *g, int value) {
     if (!g) return;
     float m = (float)clampi(value, 0, 127) / 127.0f;
     g->master = m * m;
+}
+
+int og_debug_voice_param(const og_t *g, int track, int pid) {
+    const voice_t *best = NULL;
+    for (int i = 0; i < OG_VOICES; i++) {
+        const voice_t *v = &g->v[i];
+        if (v->active && !v->fade && v->track == track && (!best || v->age > best->age)) best = v;
+    }
+    return (best && pid >= 0 && pid < P_COUNT_USED) ? best->p[pid] : -1;
 }
 
 int og_active_voices(const og_t *g) {
@@ -196,8 +167,12 @@ int og_active_voices(const og_t *g) {
 
 /* ---- voices --------------------------------------------------------- */
 
-static void voice_start(og_t *g, voice_t *v, int track, int note, int vel) {
-    const int *p = g->params[track];
+static void voice_start(og_t *g, voice_t *v, int track, int note, int vel,
+                        const int *params, uint64_t lockmask, int slide) {
+    memcpy(v->p, params, sizeof(v->p));
+    v->lockmask = lockmask;
+    v->slide = slide;
+    const int *p = v->p;
     int fresh = !v->active || v->track != track;
 
     v->active = 1;
@@ -211,7 +186,7 @@ static void voice_start(og_t *g, voice_t *v, int track, int note, int vel) {
 
     v->target = (float)note + (float)(p[P_TUNE] - 24);
     float last = g->last_pitch[track];
-    v->pitch = (p[P_GLID] > 0 && last >= 0.0f) ? last : v->target;
+    v->pitch = ((p[P_GLID] > 0 || slide) && last >= 0.0f) ? last : v->target;
     g->last_pitch[track] = v->target;
 
     v->amp.stage = ENV_ATT;
@@ -259,14 +234,10 @@ static voice_t *steal_voice(og_t *g) {
     return best;
 }
 
-void og_note_on(og_t *g, int track, int note, int velocity) {
-    if (!g || track < 0 || track >= OG_TRACKS) return;
-    note = clampi(note, 0, 127);
-    if (velocity <= 0) { og_note_off(g, track, note); return; }
-    velocity = clampi(velocity, 1, 127);
-
+static void note_on_impl(og_t *g, int track, int note, int velocity,
+                         const int *params, uint64_t lockmask, int slide) {
     voice_t *v = find_voice(g, track, note);
-    if (v) { voice_start(g, v, track, note, velocity); return; }
+    if (v) { voice_start(g, v, track, note, velocity, params, lockmask, slide); return; }
 
     v = steal_voice(g);
     if (!v) return;
@@ -276,7 +247,54 @@ void og_note_on(og_t *g, int track, int note, int velocity) {
     v->pend_note = note;
     v->pend_vel = velocity;
     v->pend_gate = 1;
+    v->pend_slide = slide;
+    memcpy(v->pend_p, params, sizeof(v->pend_p));
+    v->pend_lockmask = lockmask;
     v->age = ++g->clock;
+}
+
+void og_note_on(og_t *g, int track, int note, int velocity) {
+    if (!g || track < 0 || track >= OG_TRACKS) return;
+    note = clampi(note, 0, 127);
+    if (velocity <= 0) { og_note_off(g, track, note); return; }
+    velocity = clampi(velocity, 1, 127);
+    note_on_impl(g, track, note, velocity, g->params[track], 0, 0);
+}
+
+/* Build base params + this step's locks. */
+static uint64_t locked_params(const og_t *g, int track, const og_lock_t *locks,
+                              int step, int *out) {
+    memcpy(out, g->params[track], sizeof(int) * P_COUNT_USED);
+    uint64_t mask = 0;
+    if (!locks) return 0;
+    for (int i = 0; i < OG_LOCKS; i++) {
+        const og_lock_t *l = &locks[i];
+        if (l->used && l->step == step && l->pid < P_COUNT_USED) {
+            out[l->pid] = clampi(l->val, 0, og_param_max(l->pid));
+            mask |= 1ull << l->pid;
+        }
+    }
+    return mask;
+}
+
+void og__note_on_locked(og_t *g, int track, int note, int vel,
+                        const og_lock_t *locks, int step, int slide) {
+    int p[P_COUNT_USED];
+    uint64_t mask = locked_params(g, track, locks, step, p);
+    note_on_impl(g, track, clampi(note, 0, 127), clampi(vel, 1, 127), p, mask, slide);
+}
+
+void og__apply_locks_to_track(og_t *g, int track, const og_lock_t *locks, int step) {
+    int p[P_COUNT_USED];
+    uint64_t mask = locked_params(g, track, locks, step, p);
+    if (!mask) return;
+    for (int i = 0; i < OG_VOICES; i++) {
+        voice_t *v = &g->v[i];
+        if (!v->active || v->fade || v->track != track) continue;
+        for (int k = 0; k < P_COUNT_USED; k++)
+            if (mask & (1ull << k)) v->p[k] = p[k];
+        v->lockmask |= mask;
+    }
 }
 
 void og_note_off(og_t *g, int track, int note) {
@@ -335,13 +353,14 @@ static inline float midi_hz(float semis) {
 
 /* Render one voice for n samples (n <= OG_CTRL_RATE), adding into out. */
 static void voice_render(og_t *g, voice_t *v, float *out_l, float *out_r, int n) {
-    const int *p = g->params[v->track];
+    const int *p = v->p;
     const int algo = p[P_ALGO];
     const float velf = (float)v->vel / 127.0f;
 
     /* --- control-rate updates --- */
-    if (p[P_GLID] > 0 && v->pitch != v->target) {
-        float rate = g->dec_coef[p[P_GLID] / 2];   /* shorter than env range */
+    if ((p[P_GLID] > 0 || v->slide) && v->pitch != v->target) {
+        int gl = p[P_GLID] > 0 ? p[P_GLID] : 40;
+        float rate = g->dec_coef[gl / 2];   /* shorter than env range */
         v->pitch = v->target + (v->pitch - v->target) * rate;
         if (fabsf(v->pitch - v->target) < 0.001f) v->pitch = v->target;
     } else {
@@ -500,18 +519,21 @@ void og_render_float(og_t *g, float *out_lr, int frames) {
         if (n > OG_CTRL_RATE) n = OG_CTRL_RATE;
         memset(bl, 0, sizeof(bl));
         memset(br, 0, sizeof(br));
+        og__seq_advance(g, n);
 
         for (int i = 0; i < OG_VOICES; i++) {
             voice_t *v = &g->v[i];
             if (!v->active && v->pending) {
                 int gate = v->pend_gate;
-                voice_start(g, v, v->pend_track, v->pend_note, v->pend_vel);
+                voice_start(g, v, v->pend_track, v->pend_note, v->pend_vel,
+                            v->pend_p, v->pend_lockmask, v->pend_slide);
                 if (!gate) og_note_off(g, v->track, v->note);
             }
             if (v->active) voice_render(g, v, bl, br, n);
             if (!v->active && v->pending) {
                 int gate = v->pend_gate;
-                voice_start(g, v, v->pend_track, v->pend_note, v->pend_vel);
+                voice_start(g, v, v->pend_track, v->pend_note, v->pend_vel,
+                            v->pend_p, v->pend_lockmask, v->pend_slide);
                 if (!gate) og_note_off(g, v->track, v->note);
             }
         }

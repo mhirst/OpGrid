@@ -16,6 +16,35 @@
 #define OG_SAMPLE_RATE   44100
 #define OG_CTRL_RATE     16      /* samples per control tick */
 
+/* Sequencer sizes */
+#define OG_STEPS         64
+#define OG_LOCKS         64      /* parameter locks per clip */
+#define OG_CHORD         4       /* notes per step */
+#define OG_CLIPS         8       /* clip slots per track */
+
+/* Step flags */
+#define OG_STEP_NOTE     0x01    /* plays its notes */
+#define OG_STEP_LOCK     0x02    /* lock-only: changes sound, no new note */
+#define OG_STEP_SLIDE    0x04    /* glide into this step's note */
+
+/* Step conditions: 0 none, 1-6 fill/pre/first (and their negations),
+ * 7-41 A:B loop conditions (B = 2..8, A = 1..B), 42-60 probability 5..95%. */
+#define OG_COND_NONE     0
+#define OG_COND_FILL     1
+#define OG_COND_NFILL    2
+#define OG_COND_PRE      3
+#define OG_COND_NPRE     4
+#define OG_COND_FIRST    5
+#define OG_COND_NFIRST   6
+#define OG_COND_AB0      7
+#define OG_COND_PROB0    42
+#define OG_CONDS         61
+
+#define OG_LENS          13      /* note length table size */
+#define OG_SPEEDS        7       /* clip speed table size */
+#define OG_SPEED_1X      4
+#define OG_LEN_1STEP     4
+
 /* Parameter ids. Pages of 8, in UI order. Values are 0..127. */
 enum {
     /* Page 0: FM (machine page 1) */
@@ -56,6 +85,45 @@ void  og_all_notes_off(og_t *g);
 void  og_set_param(og_t *g, int track, int pid, int value);
 int   og_get_param(const og_t *g, int track, int pid);
 void  og_set_master(og_t *g, int value);   /* 0..127 */
+
+/* Sequencer. Step fields: see og_step_set(). All step/clip calls act on
+ * the track's active clip. */
+enum { OG_F_FLAGS = 0, OG_F_NOTE0, OG_F_NOTE1, OG_F_NOTE2, OG_F_NOTE3,
+       OG_F_VEL, OG_F_LEN, OG_F_RAT, OG_F_COND, OG_F_MICRO, OG_FIELDS };
+
+void  og_play(og_t *g, int on);
+int   og_is_playing(const og_t *g);
+void  og_set_tempo(og_t *g, float bpm);
+float og_get_tempo(const og_t *g);
+void  og_set_fill(og_t *g, int on);
+void  og_set_mute(og_t *g, int track, int on);
+int   og_get_mute(const og_t *g, int track);
+
+void  og_step_set(og_t *g, int track, int step, int field, int value);
+int   og_step_get(const og_t *g, int track, int step, int field);
+void  og_step_clear(og_t *g, int track, int step);
+int   og_lock_set(og_t *g, int track, int step, int pid, int value); /* 0 = pool full */
+void  og_lock_clear(og_t *g, int track, int step, int pid);
+int   og_lock_get(const og_t *g, int track, int step, int pid);       /* -1 = none */
+int   og_lock_count(const og_t *g, int track);
+
+void  og_clip_set_length(og_t *g, int track, int len);
+void  og_clip_set_speed(og_t *g, int track, int speed);
+void  og_clip_set_swing(og_t *g, int track, int swing);
+int   og_clip_length(const og_t *g, int track);
+int   og_clip_speed(const og_t *g, int track);
+int   og_clip_swing(const og_t *g, int track);
+int   og_track_step(const og_t *g, int track);   /* playing step or -1 */
+
+float og_len_steps(int idx);
+float og_speed_mul(int idx);
+
+/* Testing: sequencer event log (sample time quantized to the 16-sample tick). */
+#define OG_LOG_MAX 4096
+typedef struct { uint64_t t; int track, note, vel, on; } og_event_t;
+void  og_debug_log(og_t *g, int enable);           /* also clears the log */
+int   og_debug_events(const og_t *g, const og_event_t **out);
+int   og_debug_voice_param(const og_t *g, int track, int pid); /* newest voice, -1 none */
 
 /* Introspection for UI / tests. */
 int   og_active_voices(const og_t *g);

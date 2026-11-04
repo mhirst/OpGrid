@@ -1,24 +1,32 @@
 /*
- * OpGrid — full-screen UI (milestone 2: keys mode + sound editing).
+ * OpGrid — full-screen UI (milestone 3: sequencer).
  *
  * Controls
- *   Pads            play the selected track (rows a fourth apart)
- *   Shift + pad     select track (bottom 16 pads)
- *   Shift + step    select track 1-16
- *   Knobs 1-8       edit the 8 parameters on the current page
+ *   Steps             toggle steps on the current track; hold a step to edit it
+ *   Hold step + knob  lock that parameter on the step (sound pages)
+ *                     or edit the step's note/vel/len/... (STEP page)
+ *   Hold step + pad   set the step's note; more pads add chord notes (up to 4)
+ *   Delete + step     clear the step and its locks
+ *   Shift + step 1-4  show steps 1-16 / 17-32 / 33-48 / 49-64
+ *   Pads              play the selected track (rows a fourth apart)
+ *   Shift + pad       select track (bottom 16 pads)
+ *   Mute + pad        mute / unmute track (bottom 16 pads)
+ *   Shift + Mute      fill mode while held
+ *   Play              start / stop
+ *   Knobs 1-8         edit the 8 parameters on the current page
  *   Jog / Left/Right  change page
- *   Up / Down       octave
- *   Back            leave (sound keeps playing); Shift+Back exits
+ *   Up / Down         octave
+ *   Back              leave (music keeps playing)
  */
 import { setLED, setButtonLED, decodeDelta, decodeAcceleratedDelta, invalidateLedCache }
     from '/data/UserData/schwung/shared/input_filter.mjs';
 
 /* ---------- hardware ids ---------- */
 const PAD0 = 68, PADS = 32, STEP0 = 16, STEPS = 16;
-const KNOB0 = 71, JOG = 14, JOG_CLICK = 3;
-const CC_SHIFT = 49, CC_MENU = 50, CC_BACK = 51, CC_DOWN = 54, CC_UP = 55;
-const CC_LEFT = 62, CC_RIGHT = 63;
-const WHITE = 120, DIM_WHITE = 124, OFF = 0, LED_BRIGHT = 127, LED_DIM = 16;
+const KNOB0 = 71, JOG = 14;
+const CC_SHIFT = 49, CC_DOWN = 54, CC_UP = 55, CC_LEFT = 62, CC_RIGHT = 63;
+const CC_PLAY = 85, CC_MUTE = 88, CC_DELETE = 119;
+const WHITE = 120, GREY = 124, DARK = 119, OFF = 0, LED_BRIGHT = 127, LED_DIM = 16;
 
 /* ---------- tracks ---------- */
 const TRACKS = 16;
@@ -26,7 +34,7 @@ const TRACK_HUES = [1, 2, 3, 5, 8, 9, 11, 12, 14, 16, 17, 18, 19, 21, 23, 25];
 const trackBright = t => TRACK_HUES[t];
 const trackDim = t => 63 + 2 * TRACK_HUES[t];
 
-/* ---------- parameters (must match og_engine.h) ---------- */
+/* ---------- sound parameters (must match og_engine.h) ---------- */
 const RATIOS = ['.25', '.5', '.75', '1', '1.5', '2', '2.5', '3', '3.5', '4', '5',
     '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16'];
 const FTYPES = ['LP12', 'LP24', 'HP', 'BP', 'NTCH'];
@@ -61,15 +69,61 @@ const PARAMS = [
     ['DRIV', 'Drive', 127, 0, num], ['PAN', 'Pan', 127, 64, pan],
     ['VOL', 'Volume', 127, 100, num], ['VEL', 'Vel > amp', 127, 64, num],
 ];
-const PAGES = ['FM', 'FM 2', 'FILTER', 'AMP'];
 const NPARAMS = PARAMS.length;
+const SOUND_PAGES = NPARAMS / 8;            /* FM, FM 2, FILTER, AMP */
+const PAGES = ['FM', 'FM 2', 'FILTER', 'AMP', 'STEP', 'CLIP'];
+const PAGE_STEP = 4, PAGE_CLIP = 5;
+
+/* ---------- step fields (must match OG_F_* / og_seq.c) ---------- */
+const F = { FLAGS: 0, NOTE0: 1, NOTE1: 2, NOTE2: 3, NOTE3: 4, VEL: 5, LEN: 6, RAT: 7, COND: 8, MICRO: 9 };
+const FL_NOTE = 1, FL_LOCK = 2, FL_SLIDE = 4;
+const LENS = ['1/8', '1/4', '1/2', '3/4', '1', '1.5', '2', '3', '4', '6', '8', '12', '16'];
+const SPEEDS = ['1/8x', '1/4x', '1/2x', '3/4x', '1x', '1.5x', '2x'];
+const CONDS = (() => {
+    const c = ['--', 'FILL', '!FIL', 'PRE', '!PRE', '1ST', '!1ST'];
+    for (let b = 2; b <= 8; b++) for (let a = 1; a <= b; a++) c.push(`${a}:${b}`);
+    for (let p = 5; p <= 95; p += 5) c.push(`${p}%`);
+    return c;
+})();
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const noteName = n => n <= 0 ? '--' : `${NOTE_NAMES[n % 12]}${Math.floor(n / 12) - 2}`;
+
+/* STEP page: [name, max, min, formatter] — knob 0 is TYPE, 7 is SLIDE */
+const STEP_KNOBS = [
+    ['TYPE', 1, 0, v => v ? 'LOCK' : 'NOTE'],
+    ['NOTE', 127, 1, noteName],
+    ['VEL', 127, 1, num],
+    ['LEN', LENS.length - 1, 0, v => LENS[v]],
+    ['MICR', 23, -23, v => v > 0 ? `+${v}` : `${v}`],
+    ['RTCH', 8, 1, v => `${v}x`],
+    ['COND', CONDS.length - 1, 0, v => CONDS[v]],
+    ['SLID', 1, 0, v => v ? 'ON' : 'OFF'],
+];
+/* CLIP page */
+const CLIP_KNOBS = [
+    ['LEN', 64, 1, num],
+    ['SPD', SPEEDS.length - 1, 0, v => SPEEDS[v]],
+    ['SWNG', 80, 50, v => `${v}%`],
+    ['BPM', 300, 30, num],
+    ['SYNC', 1, 0, v => v ? 'MOVE' : 'OWN'],
+];
 
 /* ---------- state ---------- */
-let track = 0, page = 0, octave = 1, shift = false;
+let track = 0, page = 0, octave = 1, stepPage = 0;
+let shift = false, muteHeld = false, deleteHeld = false, fillOn = false;
+let playing = false, tempo = 120, sync = 1;
 let touchedKnob = -1, touchedUntil = 0, tickCount = 0;
-let dirty = true;
+let dirty = true, stepsDirty = true;
 const values = Array.from({ length: TRACKS }, () => PARAMS.map(p => p[3]));
-const padNote = new Array(PADS).fill(-1);       /* note held by each pad */
+const padNote = new Array(PADS).fill(-1);       /* note sounding from each pad */
+const stepFlags = Array.from({ length: TRACKS }, () => new Array(64).fill(0));
+const clipInfo = Array.from({ length: TRACKS }, () => ({ len: 16, speed: 4, swing: 50, locks: 0, mute: 0 }));
+let playheads = new Array(TRACKS).fill(-1);
+
+/* held steps: step index -> { existed, edited, fields[], locks Map(pid->val), chordCount } */
+const held = new Map();
+const stepDefaults = { note: 60, vel: 100, len: 4 };
+
 const ledCache = new Map();
 const LEDS_PER_TICK = 12;
 
@@ -80,34 +134,205 @@ function setParam(key, val) {
 function getParam(key) {
     return typeof host_module_get_param === 'function' ? host_module_get_param(key) : null;
 }
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const ints = s => `${s ?? ''}`.split(',').map(x => parseInt(x, 10));
 
 function pullTrack(t) {
     const s = getParam(`tp:${t}`);
-    if (!s) return;
-    const parts = `${s}`.split(',').map(x => parseInt(x, 10));
-    for (let i = 0; i < NPARAMS && i < parts.length; i++)
-        if (Number.isFinite(parts[i])) values[t][i] = Math.max(0, Math.min(PARAMS[i][2], parts[i]));
+    if (s) {
+        const parts = ints(s);
+        for (let i = 0; i < NPARAMS && i < parts.length; i++)
+            if (Number.isFinite(parts[i])) values[t][i] = clamp(parts[i], 0, PARAMS[i][2]);
+    }
+    pullClip(t);
+    pullSteps(t);
+}
+
+function pullClip(t) {
+    const c = ints(getParam(`clip:${t}`));
+    if (c.length >= 5 && c.every(Number.isFinite))
+        Object.assign(clipInfo[t], { len: c[0], speed: c[1], swing: c[2], locks: c[3], mute: c[4] });
+}
+
+function pullSteps(t) {
+    const s = getParam(`steps:${t}`);
+    if (s && s.length >= 64)
+        for (let i = 0; i < 64; i++) stepFlags[t][i] = s.charCodeAt(i) - 48;
+    stepsDirty = false;
+}
+
+function pullTransport() {
+    const tp = parseFloat(getParam('tempo'));
+    if (Number.isFinite(tp)) tempo = Math.round(tp);
+    const sy = parseInt(getParam('sync'), 10);
+    if (Number.isFinite(sy)) sync = sy;
+}
+
+function pullStepDetail(s) {
+    const h = held.get(s);
+    if (!h) return;
+    const f = ints(getParam(`step:${track}:${s}`));
+    if (f.length >= 10 && f.every(Number.isFinite)) h.fields = f;
+    h.locks = new Map();
+    const l = getParam(`locks:${track}:${s}`);
+    if (l) for (const kv of `${l}`.split(',')) {
+        const [p, v] = kv.split('=').map(x => parseInt(x, 10));
+        if (Number.isFinite(p) && Number.isFinite(v)) h.locks.set(p, v);
+    }
 }
 
 function selectTrack(t) {
     if (t < 0 || t >= TRACKS || t === track) return;
+    releaseHeldSteps();
     track = t;
     pullTrack(t);
     dirty = true;
 }
 
-function editParam(knob, delta) {
+/* ---------- editing ---------- */
+function touch(knob) {
+    touchedKnob = knob;
+    touchedUntil = tickCount + 600;
+    dirty = true;
+}
+
+function firstHeld() {
+    for (const [s, h] of held) return [s, h];
+    return null;
+}
+
+function editSound(knob, delta) {
     const pid = page * 8 + knob;
     if (pid >= NPARAMS) return;
     const max = PARAMS[pid][2];
-    const cur = values[track][pid];
-    const next = Math.max(0, Math.min(max, cur + delta));
-    touchedKnob = knob;
-    touchedUntil = tickCount + 600;
-    if (next === cur) { dirty = true; return; }
+    touch(knob);
+    if (held.size) {
+        /* lock the parameter on every held step */
+        for (const [s, h] of held) {
+            const cur = h.locks.has(pid) ? h.locks.get(pid) : values[track][pid];
+            const next = clamp(cur + delta, 0, max);
+            h.locks.set(pid, next);
+            h.edited = true;
+            setParam('lock', `${track} ${s} ${pid} ${next}`);
+        }
+        stepsDirty = true;
+        return;
+    }
+    const next = clamp(values[track][pid] + delta, 0, max);
+    if (next === values[track][pid]) return;
     values[track][pid] = next;
     setParam('p', `${track} ${pid} ${next}`);
+}
+
+function stepKnobValue(h, knob) {
+    const f = h.fields;
+    switch (knob) {
+    case 0: return (f[F.FLAGS] & FL_LOCK) && !(f[F.FLAGS] & FL_NOTE) ? 1 : 0;
+    case 1: return f[F.NOTE0];
+    case 2: return f[F.VEL];
+    case 3: return f[F.LEN];
+    case 4: return f[F.MICRO];
+    case 5: return f[F.RAT];
+    case 6: return f[F.COND];
+    default: return f[F.FLAGS] & FL_SLIDE ? 1 : 0;
+    }
+}
+
+function editStep(knob, delta) {
+    if (knob >= STEP_KNOBS.length) return;
+    const [, max, min] = STEP_KNOBS[knob];
+    touch(knob);
+    if (!held.size) {
+        /* no step held: edit the defaults used for new steps */
+        if (knob === 1) stepDefaults.note = clamp(stepDefaults.note + delta, 1, 127);
+        if (knob === 2) stepDefaults.vel = clamp(stepDefaults.vel + delta, 1, 127);
+        if (knob === 3) stepDefaults.len = clamp(stepDefaults.len + delta, 0, LENS.length - 1);
+        return;
+    }
+    for (const [s, h] of held) {
+        if (!h.fields) continue;
+        const f = h.fields;
+        const next = clamp(stepKnobValue(h, knob) + delta, min, max);
+        h.edited = true;
+        let field, val;
+        switch (knob) {
+        case 0: field = F.FLAGS; val = (f[F.FLAGS] & FL_SLIDE) | (next ? FL_LOCK : FL_NOTE); break;
+        case 1: field = F.NOTE0; val = next; break;
+        case 2: field = F.VEL; val = next; break;
+        case 3: field = F.LEN; val = next; break;
+        case 4: field = F.MICRO; val = next; break;
+        case 5: field = F.RAT; val = next; break;
+        case 6: field = F.COND; val = next; break;
+        default: field = F.FLAGS; val = (f[F.FLAGS] & ~FL_SLIDE) | (next ? FL_SLIDE : 0); break;
+        }
+        f[field] = val;
+        setParam('sf', `${track} ${s} ${field} ${val}`);
+    }
+    stepsDirty = true;
+}
+
+function clipKnobValue(knob) {
+    const c = clipInfo[track];
+    return [c.len, c.speed, c.swing, tempo, sync][knob];
+}
+
+function editClip(knob, delta) {
+    if (knob >= CLIP_KNOBS.length) return;
+    const [, max, min] = CLIP_KNOBS[knob];
+    touch(knob);
+    const next = clamp(clipKnobValue(knob) + delta, min, max);
+    const c = clipInfo[track];
+    switch (knob) {
+    case 0: c.len = next; setParam('clen', `${track} ${next}`); if (stepPage * 16 >= next) stepPage = 0; break;
+    case 1: c.speed = next; setParam('cspd', `${track} ${next}`); break;
+    case 2: c.swing = next; setParam('cswg', `${track} ${next}`); break;
+    case 3: tempo = next; sync = 0; setParam('tempo', next); break;
+    default: sync = next; setParam('sync', next); break;
+    }
+}
+
+/* ---------- steps ---------- */
+function onStep(i, on) {
+    const s = stepPage * 16 + i;
+    if (on && shift) {
+        if (i < 4 && i * 16 < clipInfo[track].len) { stepPage = i; dirty = true; }
+        return;
+    }
+    if (s >= clipInfo[track].len) return;
+    if (on && deleteHeld) {
+        setParam('sclr', `${track} ${s}`);
+        stepFlags[track][s] = 0;
+        dirty = true;
+        return;
+    }
+    if (on) {
+        const existed = (stepFlags[track][s] & (FL_NOTE | FL_LOCK)) !== 0;
+        if (!existed) {
+            setParam('sclr', `${track} ${s}`);
+            setParam('sf', `${track} ${s} ${F.FLAGS} ${FL_NOTE}`);
+            setParam('sf', `${track} ${s} ${F.NOTE0} ${stepDefaults.note}`);
+            setParam('sf', `${track} ${s} ${F.VEL} ${stepDefaults.vel}`);
+            setParam('sf', `${track} ${s} ${F.LEN} ${stepDefaults.len}`);
+            stepFlags[track][s] = FL_NOTE;
+        }
+        held.set(s, { existed, edited: false, fields: null, locks: new Map(), chord: 0 });
+        pullStepDetail(s);
+    } else {
+        const h = held.get(s);
+        if (!h) return;
+        held.delete(s);
+        if (h.existed && !h.edited) {
+            setParam('sclr', `${track} ${s}`);
+            stepFlags[track][s] = 0;
+        }
+        stepsDirty = true;
+    }
     dirty = true;
+}
+
+function releaseHeldSteps() {
+    held.clear();
+    stepsDirty = true;
 }
 
 /* ---------- pads ---------- */
@@ -117,13 +342,30 @@ function padToNote(i) {
 }
 
 function onPad(i, vel, on) {
-    if (on && shift) {
-        if (i < 16) selectTrack(i);
+    if (on && shift) { if (i < 16) selectTrack(i); return; }
+    if (on && muteHeld) {
+        if (i < 16) {
+            clipInfo[i].mute = clipInfo[i].mute ? 0 : 1;
+            setParam('mute', `${i} ${clipInfo[i].mute}`);
+            dirty = true;
+        }
         return;
     }
     if (on) {
         const n = padToNote(i);
         if (n > 127) return;
+        if (held.size) {
+            /* set the held steps' notes: first pad replaces, more pads add a chord */
+            for (const [s, h] of held) {
+                const slot = Math.min(h.chord, 3);
+                if (slot === 0) for (let k = 1; k < 4; k++) setParam('sf', `${track} ${s} ${F.NOTE0 + k} 0`);
+                setParam('sf', `${track} ${s} ${F.NOTE0 + slot} ${n}`);
+                if (h.fields) h.fields[F.NOTE0 + slot] = n;
+                h.chord++;
+                h.edited = true;
+            }
+            dirty = true;
+        }
         if (padNote[i] >= 0) setParam('noff', `${track} ${padNote[i]}`);
         padNote[i] = n;
         setParam('non', `${track} ${n} ${Math.max(1, vel)}`);
@@ -140,62 +382,94 @@ globalThis.onMidiMessageInternal = function (data) {
 
     if (status === 0x90 || status === 0x80) {
         const on = status === 0x90 && d2 > 0;
-        if (d1 < 10) return;                                  /* knob touch */
+        if (d1 < 10) return;                                   /* knob touch */
         if (d1 >= PAD0 && d1 < PAD0 + PADS) { onPad(d1 - PAD0, d2, on); return; }
-        if (d1 >= STEP0 && d1 < STEP0 + STEPS && on && shift) selectTrack(d1 - STEP0);
+        if (d1 >= STEP0 && d1 < STEP0 + STEPS) onStep(d1 - STEP0, on);
         return;
     }
     if (status !== 0xB0) return;
 
     if (d1 >= KNOB0 && d1 < KNOB0 + 8) {
         const knob = d1 - KNOB0;
-        const pid = page * 8 + knob;
-        const small = pid < NPARAMS && PARAMS[pid][2] < 32;
-        const delta = small ? decodeDelta(d2) : decodeAcceleratedDelta(d2, knob);
-        editParam(knob, shift && !small ? Math.sign(delta) : delta);
+        let small;
+        if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && PARAMS[pid][2] < 32; }
+        else if (page === PAGE_STEP) small = knob !== 1 && knob !== 2;
+        else small = knob === 1 || knob === 4;
+        const raw = small ? decodeDelta(d2) : decodeAcceleratedDelta(d2, knob);
+        const delta = shift && !small ? Math.sign(raw) : raw;
+        if (!delta) return;
+        if (page < SOUND_PAGES) editSound(knob, delta);
+        else if (page === PAGE_STEP) editStep(knob, delta);
+        else editClip(knob, delta);
         return;
     }
+    const press = d2 > 0;
     switch (d1) {
-    case CC_SHIFT: shift = d2 > 0; dirty = true; break;
+    case CC_SHIFT: shift = press; updateFill(); dirty = true; break;
+    case CC_MUTE: muteHeld = press; updateFill(); dirty = true; break;
+    case CC_DELETE: deleteHeld = press; break;
+    case CC_PLAY:
+        if (press) { playing = !playing; setParam('play', playing ? 1 : 0); dirty = true; }
+        break;
     case JOG: { const dl = decodeDelta(d2); if (dl) changePage(dl); break; }
-    case CC_LEFT: if (d2 > 0) changePage(-1); break;
-    case CC_RIGHT: if (d2 > 0) changePage(1); break;
-    case CC_UP: if (d2 > 0) { octave = Math.min(6, octave + 1); dirty = true; } break;
-    case CC_DOWN: if (d2 > 0) { octave = Math.max(-2, octave - 1); dirty = true; } break;
+    case CC_LEFT: if (press) changePage(-1); break;
+    case CC_RIGHT: if (press) changePage(1); break;
+    case CC_UP: if (press) { octave = Math.min(6, octave + 1); dirty = true; } break;
+    case CC_DOWN: if (press) { octave = Math.max(-2, octave - 1); dirty = true; } break;
     default: break;
     }
 };
 
 globalThis.onMidiMessageExternal = function () { /* DSP handles external notes */ };
 
+function updateFill() {
+    const f = shift && muteHeld;
+    if (f !== fillOn) { fillOn = f; setParam('fill', f ? 1 : 0); }
+}
+
 function changePage(d) {
     page = (page + d + PAGES.length) % PAGES.length;
     touchedKnob = -1;
+    if (page === PAGE_CLIP) { pullClip(track); pullTransport(); }
     dirty = true;
 }
 
 /* ---------- LEDs ---------- */
+function stepColor(i) {
+    const s = stepPage * 16 + i;
+    const len = clipInfo[track].len;
+    if (shift) {
+        if (i >= 4) return OFF;
+        if (i * 16 >= len) return OFF;
+        return i === stepPage ? WHITE : GREY;
+    }
+    if (s >= len) return OFF;
+    if (held.has(s)) return WHITE;
+    if (playing && playheads[track] === s) return WHITE;
+    const f = stepFlags[track][s];
+    if (f & FL_NOTE) return trackBright(track);
+    if (f & FL_LOCK) return GREY;
+    return i % 4 === 0 ? DARK : OFF;
+}
+
+function padColor(i) {
+    if (shift) return i < 16 ? (i === track ? trackBright(i) : trackDim(i)) : OFF;
+    if (muteHeld) return i < 16 ? (clipInfo[i].mute ? OFF : trackBright(i)) : OFF;
+    if (padNote[i] >= 0) return WHITE;
+    const n = padToNote(i);
+    return n > 127 ? OFF : (n % 12 === 0 ? trackBright(track) : trackDim(track));
+}
+
 function desiredLeds() {
     const out = [];
-    for (let i = 0; i < PADS; i++) {
-        let c;
-        if (shift) {
-            c = i < 16 ? (i === track ? trackBright(i) : trackDim(i)) : OFF;
-        } else if (padNote[i] >= 0) {
-            c = WHITE;
-        } else {
-            const n = padToNote(i);
-            c = n > 127 ? OFF : (n % 12 === 0 ? trackBright(track) : trackDim(track));
-        }
-        out.push(['n', PAD0 + i, c]);
-    }
-    for (let i = 0; i < STEPS; i++) {
-        const c = shift ? (i === track ? trackBright(i) : trackDim(i)) : OFF;
-        out.push(['n', STEP0 + i, c]);
-    }
+    for (let i = 0; i < STEPS; i++) out.push(['n', STEP0 + i, stepColor(i)]);
+    for (let i = 0; i < PADS; i++) out.push(['n', PAD0 + i, padColor(i)]);
+    out.push(['c', CC_PLAY, playing ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_LEFT, LED_DIM], ['c', CC_RIGHT, LED_DIM]);
     out.push(['c', CC_UP, octave < 6 ? LED_DIM : OFF], ['c', CC_DOWN, octave > -2 ? LED_DIM : OFF]);
     out.push(['c', CC_SHIFT, shift ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_MUTE, muteHeld ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_DELETE, deleteHeld ? LED_BRIGHT : LED_DIM]);
     return out;
 }
 
@@ -211,40 +485,80 @@ function flushLeds() {
 }
 
 /* ---------- screen (128x64, 1-bit) ---------- */
-function drawScreen() {
-    clear_screen();
-    fill_rect(0, 0, 128, 10, 1);
-    const hdr = `T${String(track + 1).padStart(2, '0')} FM POLY`;
-    print(2, 1, hdr, 0);
-    const pg = `${PAGES[page]} ${page + 1}/${PAGES.length}`;
-    print(126 - text_width(pg), 1, pg, 0);
-
-    for (let k = 0; k < 8; k++) {
-        const pid = page * 8 + k;
-        if (pid >= NPARAMS) continue;
-        const [name, , max, , fmt] = PARAMS[pid];
-        const v = Math.max(0, Math.min(max, values[track][pid] | 0));
-        const x = (k % 4) * 32, y = k < 4 ? 12 : 38;
-        const hot = k === touchedKnob && tickCount < touchedUntil;
-        if (hot) fill_rect(x, y, 32, 25, 1);
-        const ink = hot ? 0 : 1;
-        print(x + 2, y + 1, name, ink);
-        print(x + 2, y + 11, `${fmt(v) ?? '?'}`, ink);
-        const w = Math.round((v / max) * 28);
+function drawCell(k, name, text, frac, hot, marked) {
+    const x = (k % 4) * 32, y = k < 4 ? 12 : 38;
+    if (hot) fill_rect(x, y, 32, 25, 1);
+    const ink = hot ? 0 : 1;
+    print(x + 2, y + 1, name, ink);
+    if (marked) fill_rect(x + 27, y + 2, 3, 3, ink);
+    print(x + 2, y + 11, `${text ?? '?'}`, ink);
+    if (frac !== null) {
         draw_rect(x + 2, y + 21, 28, 3, ink);
+        const w = Math.round(clamp(frac, 0, 1) * 28);
         if (w > 0) fill_rect(x + 2, y + 21, w, 3, ink);
     }
+}
 
-    if (touchedKnob >= 0 && tickCount < touchedUntil && page === 0 && touchedKnob === 0) {
-        /* show the algorithm routing while it is being changed */
-        fill_rect(0, 54, 128, 10, 0);
-        print(2, 55, `ALGO ${ALGO_NAMES[values[track][0]]}`, 1);
+function drawHeader() {
+    fill_rect(0, 0, 128, 10, 1);
+    const hs = firstHeld();
+    let left = `T${String(track + 1).padStart(2, '0')}`;
+    left += hs ? ` STEP ${hs[0] + 1}` : (clipInfo[track].mute ? ' MUTED' : ' FM POLY');
+    print(2, 1, left, 0);
+    const right = `${playing ? '>' : '.'} ${PAGES[page]}`;
+    print(126 - text_width(right), 1, right, 0);
+}
+
+function drawScreen() {
+    clear_screen();
+    drawHeader();
+    const hs = firstHeld();
+    const hot = k => k === touchedKnob && tickCount < touchedUntil;
+
+    if (page < SOUND_PAGES) {
+        for (let k = 0; k < 8; k++) {
+            const pid = page * 8 + k;
+            const [name, , max, , fmt] = PARAMS[pid];
+            const locked = hs && hs[1].locks.has(pid);
+            const v = clamp(locked ? hs[1].locks.get(pid) : values[track][pid] | 0, 0, max);
+            drawCell(k, name, fmt(v), v / max, hot(k), locked);
+        }
+        if (hot(0) && page === 0) {
+            fill_rect(0, 54, 128, 10, 0);
+            print(2, 55, `ALGO ${ALGO_NAMES[values[track][0]]}`, 1);
+        }
+    } else if (page === PAGE_STEP) {
+        if (!hs) {
+            drawCell(1, 'NOTE', noteName(stepDefaults.note), null, hot(1), false);
+            drawCell(2, 'VEL', `${stepDefaults.vel}`, stepDefaults.vel / 127, hot(2), false);
+            drawCell(3, 'LEN', LENS[stepDefaults.len], null, hot(3), false);
+            print(2, 42, 'New-step defaults.', 1);
+            print(2, 52, 'Hold a step to edit', 1);
+        } else if (hs[1].fields) {
+            STEP_KNOBS.forEach(([name, max, min, fmt], k) => {
+                const v = stepKnobValue(hs[1], k);
+                drawCell(k, name, fmt(v), max - min > 1 ? (v - min) / (max - min) : null, hot(k), false);
+            });
+            const f = hs[1].fields, chord = [f[F.NOTE1], f[F.NOTE2], f[F.NOTE3]].filter(n => n > 0);
+            if (chord.length && !hot(1)) {
+                fill_rect(0, 54, 128, 10, 0);
+                print(2, 55, `+ ${chord.map(noteName).join(' ')}`, 1);
+            }
+        }
+    } else {
+        CLIP_KNOBS.forEach(([name, max, min, fmt], k) => {
+            const v = clipKnobValue(k);
+            drawCell(k, name, fmt(v), max - min > 1 ? (v - min) / (max - min) : null, hot(k), false);
+        });
+        print(2 + 32, 52 - 2, `LOCKS ${clipInfo[track].locks}/64`, 1);
     }
 }
 
 /* ---------- lifecycle ---------- */
 globalThis.init = function () {
     for (let t = 0; t < TRACKS; t++) pullTrack(t);
+    pullTransport();
+    playing = getParam('play') === '1';
     ledCache.clear();
     dirty = true;
 };
@@ -253,6 +567,8 @@ globalThis.onResume = function () {
     ledCache.clear();
     if (typeof invalidateLedCache === 'function') invalidateLedCache();
     pullTrack(track);
+    pullTransport();
+    playing = getParam('play') === '1';
     dirty = true;
 };
 
@@ -263,6 +579,13 @@ globalThis.onUnload = function () {
 globalThis.tick = function () {
     tickCount++;
     if (touchedKnob >= 0 && tickCount === touchedUntil) dirty = true;
+    if (tickCount % 8 === 0 && playing) {
+        const p = ints(getParam('pos'));
+        if (p.length === TRACKS && p[track] !== playheads[track]) dirty = true;
+        if (p.length === TRACKS) playheads = p;
+    }
+    if (stepsDirty && tickCount % 4 === 0) { pullSteps(track); pullClip(track); }
+    if (sync && tickCount % 256 === 0) { const old = tempo; pullTransport(); if (old !== tempo) dirty = true; }
     flushLeds();
     if (dirty && tickCount % 4 === 0) {
         drawScreen();
@@ -271,4 +594,7 @@ globalThis.tick = function () {
 };
 
 /* exported for tests */
-globalThis.__opgrid = { PARAMS, PAGES, values, state: () => ({ track, page, octave, shift }) };
+globalThis.__opgrid = {
+    PARAMS, PAGES, CONDS, LENS, SPEEDS, values, stepFlags, clipInfo, held,
+    state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync }),
+};
