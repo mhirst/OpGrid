@@ -178,6 +178,9 @@ void  og_set_edit_clip(og_t *g, int track, int clip);
 int   og_get_edit_clip(const og_t *g, int track);
 void  og_clip_copy(og_t *g, int st, int sc, int dt, int dc);
 void  og_clip_clear(og_t *g, int track, int clip);
+void  og_clip_notes(const og_t *g, int track, uint64_t out[2]);   /* notes used in the edit clip */
+int   og_clip_remove_note(og_t *g, int track, int note);          /* returns steps changed */
+void  og_clip_clear_steps(og_t *g, int track);                    /* keeps length/speed/swing */
 
 /* Recording. Live notes go through og_live_note_on/off so they can be
  * recorded into the playing clip of the record track. */

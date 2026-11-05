@@ -36,6 +36,7 @@ const TRACKS = 16;
 const TRACK_HUES = [1, 3, 8, 7, 9, 11, 13, 15, 16, 17, 18, 21, 22, 23, 26, 25];
 const trackBright = t => TRACK_HUES[t];
 const trackDim = t => 63 + 2 * TRACK_HUES[t];
+const trackFaint = t => 64 + 2 * TRACK_HUES[t];          /* the palette's darkest shade of the hue */
 
 /* ---------- sound parameters (must match og_engine.h) ---------- */
 const RATIOS = ['.25', '.5', '.75', '1', '1.5', '2', '2.5', '3', '3.5', '4', '5',
@@ -241,7 +242,8 @@ const CLIPS = 8;
 
 /* ---------- state ---------- */
 let track = 0, page = 0, octave = 1, stepPage = 0;
-let shift = false, muteHeld = false, muteUsed = false, deleteHeld = false, fillOn = false;
+let shift = false, muteHeld = false, muteUsed = false, deleteHeld = false, deleteUsed = false, fillOn = false;
+const usedNotes = new Set();                      /* notes used in the selected track's clip */
 let mixer = false, mixBank = 0;
 let clipMode = false, trackBank = 0, sceneBank = 0, copyHeld = false, copySrc = null, launchQ = 3;
 const clipStates = new Array(TRACKS * CLIPS).fill(0);
@@ -307,7 +309,44 @@ function pullSteps(t) {
     const s = getParam(`steps:${t}`);
     if (s && s.length >= 64)
         for (let i = 0; i < 64; i++) stepFlags[t][i] = s.charCodeAt(i) - 48;
+    if (t === track) {
+        usedNotes.clear();
+        for (const n of ints(getParam(`notes:${t}`))) if (Number.isFinite(n)) usedNotes.add(n);
+    }
     stepsDirty = false;
+}
+
+/* ---------- undo for deletes: a copy of the clip from just before ---------- */
+let lastUndo = null;
+function snapshotClip(what) {
+    const c = editClips[track];
+    const hex = getParam(`cdump:${track}:${c}`);
+    lastUndo = hex ? { t: track, c, hex, what } : null;
+}
+function undo() {
+    if (lastUndo) {
+        const u = lastUndo;
+        lastUndo = null;
+        setParam('cload', `${u.t} ${u.c} ${u.hex}`);
+        if (u.t === track) { stepsDirty = true; pullSteps(track); pullClip(track); }
+        showFlash(`UNDO ${u.what}`);
+        return;
+    }
+    setParam('undo', 1);
+    pullTrack(track); pullClips();
+    showFlash('UNDO RECORDING');
+}
+
+/* delete the held steps (step held, then Delete pressed) */
+function deleteHeldSteps() {
+    if (!held.size) return false;
+    snapshotClip('DELETE');
+    const steps = [...held.keys()];
+    for (const st of steps) { setParam('sclr', `${track} ${st}`); stepFlags[track][st] = 0; }
+    held.clear();
+    stepsDirty = true;
+    showFlash(steps.length > 1 ? `${steps.length} STEPS CLEARED` : `STEP ${steps[0] + 1} CLEARED`);
+    return true;
 }
 
 function pullFx() {
@@ -602,8 +641,14 @@ function onStep(i, on) {
     }
     if (s >= clipInfo[track].len) return;
     if (on && deleteHeld) {
-        setParam('sclr', `${track} ${s}`);
-        stepFlags[track][s] = 0;
+        deleteUsed = true;
+        if (stepFlags[track][s] & (FL_NOTE | FL_LOCK)) {
+            snapshotClip('DELETE');
+            setParam('sclr', `${track} ${s}`);
+            stepFlags[track][s] = 0;
+            stepsDirty = true;
+            showFlash(`STEP ${s + 1} CLEARED`);
+        }
         dirty = true;
         return;
     }
@@ -654,6 +699,19 @@ function onPad(i, vel, on) {
         return;
     }
     if (on && shift) { if (i < 16) selectTrack(i); return; }
+    if (on && deleteHeld) {
+        /* Delete + pad: take that note out of the whole clip */
+        deleteUsed = true;
+        const n = padToNote(i);
+        if (usedNotes.has(n)) {
+            snapshotClip('DELETE');
+            setParam('nclr', `${track} ${n}`);
+            stepsDirty = true;
+            pullSteps(track);
+            showFlash(`${noteName(n)} REMOVED`);
+        } else showFlash(`NO ${noteName(n)} IN CLIP`);
+        return;
+    }
     if (on && muteHeld) {
         muteUsed = true;
         if (i < 16) toggleMute(i);
@@ -736,7 +794,21 @@ globalThis.onMidiMessageInternal = function (data) {
         updateFill(); dirty = true; break;
     case CC_DELETE:
         deleteHeld = press;
-        if (press && songView) { songDeleteRow(); }
+        if (!press) break;
+        deleteUsed = false;
+        if (songView && !clipMode) { songDeleteRow(); break; }
+        if (clipMode || mixer || menuOpen || browser) break;
+        if (deleteHeldSteps()) { deleteUsed = true; break; }        /* step held, then Delete */
+        if (shift) {                                                /* Shift + Delete: whole clip */
+            deleteUsed = true;
+            snapshotClip('CLEAR');
+            setParam('csclr', `${track}`);
+            for (let k = 0; k < 64; k++) stepFlags[track][k] = 0;
+            stepsDirty = true;
+            pullSteps(track);
+            showFlash('CLIP CLEARED');
+        }
+        dirty = true;
         break;
     case CC_COPY:
         copyHeld = press; if (!press) copySrc = null;
@@ -753,11 +825,7 @@ globalThis.onMidiMessageInternal = function (data) {
         break;
     case CC_CAPTURE: if (press) toggleCapture(); break;
     case CC_UNDO:
-        if (press) {
-            setParam('undo', 1);
-            pullTrack(track); pullClips();
-            showFlash('UNDO');
-        }
+        if (press) undo();
         break;
     case CC_REC:
         if (!press) break;
@@ -767,6 +835,7 @@ globalThis.onMidiMessageInternal = function (data) {
             showFlash(`CLICK ${CLICKS[clickMode]}`);
         } else {
             recArmed = !recArmed;
+            lastUndo = null;
             setParam('rtrack', track);
             setParam('rec', recArmed ? 1 : 0);
             if (!recArmed) { recLocked.clear(); pullTrack(track); }
@@ -900,7 +969,14 @@ function padColor(i) {
     if (muteHeld) return i < 16 ? (clipInfo[i].mute ? trackDim(i) : trackBright(i)) : OFF;
     if (padNote[i] >= 0) return WHITE;
     const n = padToNote(i);
-    return n > 127 ? OFF : (n % 12 === 0 ? trackBright(track) : trackDim(track));
+    if (n > 127) return OFF;
+    /* holding a step: its notes light white */
+    const hs = firstHeld();
+    if (hs && hs[1].fields && [F.NOTE0, F.NOTE1, F.NOTE2, F.NOTE3].some(f => hs[1].fields[f] === n)) return WHITE;
+    if (deleteHeld) return usedNotes.has(n) ? trackBright(track) : OFF;   /* what Delete + pad would remove */
+    /* bright = used in this clip; dim = C (to find your octave); everything else very dark */
+    if (usedNotes.has(n)) return trackBright(track);
+    return n % 12 === 0 ? trackDim(track) : trackFaint(track);
 }
 
 function desiredLeds() {
@@ -1663,6 +1739,14 @@ globalThis.tick = function () {
     }
     if (stepsDirty && tickCount % 4 === 0) { pullSteps(track); pullClip(track); }
     if (clipMode && tickCount % 16 === 0) pullClips();
+    else if (tickCount % 32 === 0) {
+        /* the edited clip follows the playing one: refresh if it moved */
+        const e = getParam('edits');
+        if (e && e.length >= TRACKS) {
+            const c = e.charCodeAt(track) - 48;
+            if (c !== editClips[track]) { for (let t = 0; t < TRACKS; t++) editClips[t] = e.charCodeAt(t) - 48; pullTrack(track); dirty = true; }
+        }
+    }
     if ((songView || songOn || capturing) && tickCount % 16 === 0) pullSong();
     if ((recArmed || countingIn) && tickCount % 16 === 0) {
         pullRec();

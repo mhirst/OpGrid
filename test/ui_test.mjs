@@ -83,7 +83,16 @@ function dspSet(k, v) {
     case 'rp': dsp.log.push(['rp', ...a]); break;
     case 'lnon': dsp.log.push(['lnon', ...a]); break;
     case 'tpset': { const vals = `${v}`.split(' ')[1].split(',').map(Number); dsp.params[a[0]] = vals; break; }
-    case 'cload': { const parts = `${v}`.split(' '); dsp.cdumps.set(`${parts[0]}:${parts[1]}`, parts[2]);
+    case 'nclr': for (const st of dsp.steps[a[0]]) {
+            if (!(st[0] & 1)) continue;
+            const kept = st.slice(1, 5).filter(n => n && n !== a[1]);
+            if (kept.length === st.slice(1, 5).filter(n => n).length) continue;
+            if (!kept.length) st.splice(0, 10, ...reset()); else for (let k = 0; k < 4; k++) st[1 + k] = kept[k] || 0;
+        } dsp.log.push(['nclr', ...a]); break;
+    case 'csclr': dsp.steps[a[0]] = dsp.steps[a[0]].map(() => reset()); dsp.log.push(['csclr', a[0]]); break;
+    case 'cload': { const parts = `${v}`.split(' ');
+        try { const st = JSON.parse(Buffer.from(parts[2], 'hex').toString()); if (Array.isArray(st)) { dsp.steps[+parts[0]] = st; dsp.log.push(['cload-steps', +parts[0]]); break; } } catch (e) { /* not ours */ }
+        dsp.cdumps.set(`${parts[0]}:${parts[1]}`, parts[2]);
         dsp.clips[+parts[0]][+parts[1]] = Math.max(1, dsp.clips[+parts[0]][+parts[1]]); break; }
     case 'sins': { const sg = dsp.songs[a[0]]; const row = a[2] >= 0
             ? { scene: a[2], bars: 4, reps: 1, tempo: 0, swing: 0, mutes: 0, clips: new Array(16).fill(a[2]) }
@@ -145,7 +154,11 @@ function dspGet(k) {
         return r ? [r.scene, r.bars, r.reps, r.tempo, r.swing, r.mutes, ...r.clips].join(',') : null; }
     if ((m = k.match(/^sloop:(\d+)$/))) return `${dsp.songs[+m[1]].loop}`;
     if ((m = k.match(/^sdump:(\d+)$/))) return Buffer.from(JSON.stringify(dsp.songs[+m[1]].rows)).toString('hex');
-    if ((m = k.match(/^cdump:(\d+):(\d+)$/))) return dsp.cdumps.get(`${m[1]}:${m[2]}`) || '10043200' + '00'.repeat(20);
+    if ((m = k.match(/^cdump:(\d+):(\d+)$/))) return dsp.cdumps.get(`${m[1]}:${m[2]}`) ||
+        (dsp.useJsonDumps ? Buffer.from(JSON.stringify(dsp.steps[+m[1]])).toString('hex') : '10043200' + '00'.repeat(20));
+    if ((m = k.match(/^notes:(\d+)$/))) { const set = new Set();
+        for (const st of dsp.steps[+m[1]]) if (st[0] & 1) for (const n of st.slice(1, 5)) if (n) set.add(n);
+        return [...set].join(','); }
     if (k === 'mix') return dsp.mute.join('') + dsp.solo.join('');
     if (k === 'sync') return `${dsp.sync}`;
     if (k === 'play') return `${dsp.play}`;
@@ -567,6 +580,49 @@ midi(0xB0, 58, 127); midi(0xB0, 58, 0);
 check(ui.state().clipMode, 'clip grid');
 midi(0xB0, 51, 127);
 check(!ui.state().clipMode, 'Back leaves the clip grid');
+
+/* ---- trig workflow: deleting, undo, pad lighting ---- */
+dsp.useJsonDumps = true;
+jogTo(2);
+const T = ui.state().track;
+dsp.steps[T] = dsp.steps[T].map(() => [0, 60, 0, 0, 0, 100, 4, 1, 0, 0]);
+for (const st of [0, 4, 8]) { midi(0x90, 16 + st, 100); midi(0x80, 16 + st, 0); }
+ticks(8);
+check([0, 4, 8].every(st => dsp.steps[T][st][0] & 1), 'three steps placed');
+/* step held, then Delete */
+midi(0x90, 16 + 4, 100); midi(0xB0, 119, 127); midi(0xB0, 119, 0); midi(0x80, 16 + 4, 0);
+ticks(8);
+check(!(dsp.steps[T][4][0] & 1), 'hold step + Delete clears it');
+check(!(ui.stepFlags[T][4] & 1), 'and it stays cleared on release');
+/* Undo brings it back */
+midi(0xB0, 56, 127);
+check(dsp.steps[T][4][0] & 1, 'Undo restores the deleted step');
+/* Delete held, then step */
+midi(0xB0, 119, 127); midi(0x90, 16 + 8, 100); midi(0x80, 16 + 8, 0); midi(0xB0, 119, 0);
+check(!(dsp.steps[T][8][0] & 1), 'Delete + step clears it');
+/* Delete + pad removes that note everywhere */
+const NOTE = dsp.steps[T][0][1];                              /* whatever new steps got */
+const notePad = [...Array(32).keys()].find(i => { const r = Math.floor(i / 8), c = i % 8; return 36 + ui.state().octave * 12 + c + r * 5 === NOTE; });
+midi(0xB0, 119, 127); midi(0x90, 68 + notePad, 100); midi(0x80, 68 + notePad, 0); midi(0xB0, 119, 0);
+check(![0, 4].some(st => dsp.steps[T][st][0] & 1) && logHas('nclr', T, NOTE), 'Delete + pad removes the note from the clip');
+midi(0xB0, 56, 127);
+check(dsp.steps[T][0][0] & 1, 'Undo after Delete + pad');
+/* Shift + Delete clears the whole clip */
+midi(0xB0, 49, 127); midi(0xB0, 119, 127); midi(0xB0, 119, 0); midi(0xB0, 49, 0);
+check(logHas('csclr', T) && !dsp.steps[T].some(st => st[0] & 1), 'Shift + Delete clears the clip');
+midi(0xB0, 56, 127);
+check(dsp.steps[T].filter(st => st[0] & 1).length >= 2, 'Undo after clearing the clip');
+/* pads: notes used in the clip bright, others dark */
+ticks(60);
+globalThis.__leds.length = 0;
+globalThis.onResume();
+ticks(30);
+const ledOf = n => { let c; for (const [k, id, col] of globalThis.__leds) if (k === 'n' && id === n) c = col; return c; };
+const usedCol = ledOf(68 + notePad);
+const otherPad = notePad + 1;
+check(usedCol !== undefined && usedCol !== ledOf(68 + otherPad), `used-note pad lit differently (${usedCol} vs ${ledOf(68 + otherPad)})`);
+check(ledOf(68 + otherPad) >= 65, `unused pads use a dark shade (${ledOf(68 + otherPad)})`);
+dsp.useJsonDumps = false;
 
 /* regression: FILTER page knob 1 (cutoff, 0-127) must use acceleration */
 jogTo(2);

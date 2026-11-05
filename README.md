@@ -2,7 +2,7 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module: four synth machines, a step sequencer with per-step locks and conditions, clip launching, live recording, song mode, effects, and a starter sound library.
 
-**Status: 0.10.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
+**Status: 0.11.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
 
 | | | |
 |---|---|---|
@@ -42,18 +42,20 @@ A new project starts with a kit: kick, snare, hat, clap, bass, keys, lead and pa
 | Step buttons | Toggle steps on the selected track |
 | Hold step + knob | Lock that value on the step (sound pages), or edit the step (STEP page) |
 | Hold step + pad | Set the step's note; more pads add a chord (up to 4 notes) |
-| Delete + step | Clear the step and its locks |
+| Delete + step, or hold step + Delete | Clear the step and its locks |
+| Delete + pad | Remove that note from the whole clip |
+| Shift + Delete | Clear the whole clip (keeps its length and speed) |
+| Undo | Undo the last delete or clear (or the last recording take) |
 | Shift + step 1–4 | Show steps 1–16 / 17–32 / 33–48 / 49–64 |
 | Play | Start / stop |
 | Shift + Play | Stop all clips (at the next launch point) |
 | Loop | Clip grid on / off |
 | Rec | Arm / disarm recording on the selected track |
 | Shift + Rec | Click: OFF / COUNT-IN / ON |
-| Undo | Undo the last recording take |
 | Menu | Project menu (jog to choose, jog click to select) |
 | Shift + Loop | Song view / song mode on / off |
 | Capture | Capture a live performance as a song |
-| Pads | Play the selected track (rows are a fourth apart) |
+| Pads | Play the selected track (rows are a fourth apart). Bright = a note used in this clip, dim = C, dark = unused; holding a step lights its notes white |
 | Shift + pad (bottom 16) | Select track 1–16 |
 | Mute + pad (bottom 16) | Mute / unmute a track |
 | Mute (tap) | Mixer mode on / off |

@@ -98,6 +98,7 @@ void og_play(og_t *g, int on) {
             og_trackseq_t *ts = &g->ts[t];
             if (ts->queued != OG_Q_NONE) {   /* queued while stopped: take effect now */
                 ts->clip = ts->queued == OG_Q_STOP ? -1 : ts->queued;
+                if (ts->clip >= 0) ts->edit = ts->clip;      /* you edit what you hear */
                 ts->queued = OG_Q_NONE;
             }
             ts->pos = 0.0;
@@ -245,6 +246,7 @@ static void queue(og_t *g, int track, int what) {
     og_trackseq_t *ts = &g->ts[track];
     if (!g->playing) {                 /* stopped transport: switch now */
         ts->clip = what == OG_Q_STOP ? -1 : what;
+        if (what >= 0) ts->edit = what;
         ts->queued = OG_Q_NONE;
         ts->pos = 0.0;
         return;
@@ -296,6 +298,46 @@ void og_clip_copy(og_t *g, int st, int sc, int dt, int dc) {
     if (st == dt && sc == dc) return;
     g->clips[dt][dc] = g->clips[st][sc];
 }
+/* notes used by the edit clip's note steps (inside its length): bit n of out[n/64] */
+void og_clip_notes(const og_t *g, int track, uint64_t out[2]) {
+    out[0] = out[1] = 0;
+    if (!g || !track_ok(track)) return;
+    const og_clip_t *c = cur_clip_c(g, track);
+    for (int s = 0; s < c->length; s++) {
+        const og_step_t *st = &c->steps[s];
+        if (!(st->flags & OG_STEP_NOTE)) continue;
+        for (int k = 0; k < OG_CHORD; k++)
+            if (st->notes[k]) out[st->notes[k] >> 6] |= 1ull << (st->notes[k] & 63);
+    }
+}
+
+/* remove one note everywhere in the edit clip; steps left with no note are cleared */
+int og_clip_remove_note(og_t *g, int track, int note) {
+    if (!g || !track_ok(track)) return 0;
+    og_clip_t *c = cur_clip(g, track);
+    int removed = 0;
+    for (int s = 0; s < OG_STEPS; s++) {
+        og_step_t *st = &c->steps[s];
+        if (!(st->flags & OG_STEP_NOTE)) continue;
+        int kept[OG_CHORD], n = 0, hit = 0;
+        for (int k = 0; k < OG_CHORD; k++) {
+            if (!st->notes[k]) continue;
+            if (st->notes[k] == note) hit = 1; else kept[n++] = st->notes[k];
+        }
+        if (!hit) continue;
+        removed++;
+        if (n == 0) { og_step_clear(g, track, s); continue; }
+        for (int k = 0; k < OG_CHORD; k++) st->notes[k] = (uint8_t)(k < n ? kept[k] : 0);
+    }
+    return removed;
+}
+
+/* clear every step and lock of the edit clip, keeping its length, speed and swing */
+void og_clip_clear_steps(og_t *g, int track) {
+    if (!g || !track_ok(track)) return;
+    for (int s = 0; s < OG_STEPS; s++) og_step_clear(g, track, s);
+}
+
 void og_clip_clear(og_t *g, int track, int clip) {
     if (!g || !track_ok(track) || !clip_ok(clip)) return;
     og__clip_reset(&g->clips[track][clip]);
@@ -438,6 +480,7 @@ void og__seq_advance(og_t *g, int frames) {
                 for (int i = 0; i < OG_NOTEOFFS; i++)
                     if (g->offs[i].used && g->offs[i].track == t) g->offs[i].at -= old_at_b;
                 ts->clip = ts->queued;
+                ts->edit = ts->clip;                       /* you edit what you hear */
                 ts->pos = (gs - b) * og_speed_mul(play_clip(g, t)->speed);
                 ts->pre = 0;
                 ts->cur_step = -1;

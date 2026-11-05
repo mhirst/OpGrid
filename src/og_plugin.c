@@ -39,6 +39,8 @@
  *   set "lq" "<0..5>"        launch quantize: off, step, beat, 1/2/4 bars
  *   set "edit" "<t> <c>"     clip the step/lock/clip calls act on
  *   set "ccopy" "<st> <sc> <dt> <dc>"   "cclr" "<t> <c>"
+ *   set "nclr" "<t> <note>"  remove a note from the edit clip   "csclr" "<t>"  clear its steps
+ *   get "notes:<t>"          notes used in the edit clip, comma separated
  *   get "clips"              128 chars, track-major: OG_CLIP_* state per slot
  *   get "edits"              16 chars: each track's edit clip
  *   get "lq"
@@ -170,6 +172,10 @@ static void plug_set(void *inst, const char *key, const char *val) {
         if (parse_ints(val, a, 2) == 2) og_set_edit_clip(g, a[0], a[1]);
     } else if (!strcmp(key, "ccopy")) {
         if (parse_ints(val, a, 4) == 4) og_clip_copy(g, a[0], a[1], a[2], a[3]);
+    } else if (!strcmp(key, "nclr")) {
+        if (parse_ints(val, a, 2) == 2) og_clip_remove_note(g, a[0], a[1]);
+    } else if (!strcmp(key, "csclr")) {
+        if (parse_ints(val, a, 1) == 1) og_clip_clear_steps(g, a[0]);
     } else if (!strcmp(key, "cclr")) {
         if (parse_ints(val, a, 2) == 2) og_clip_clear(g, a[0], a[1]);
     } else if (!strcmp(key, "rec")) {
@@ -330,6 +336,15 @@ static int plug_get(void *inst, const char *key, char *buf, int buf_len) {
     }
     if (!strncmp(key, "sloop:", 6)) return snprintf(buf, (size_t)buf_len, "%d", og_song_loop(g, atoi(key + 6)));
     if (!strncmp(key, "sdump:", 6)) return og_song_dump(g, atoi(key + 6), buf, buf_len);
+    if (!strncmp(key, "notes:", 6)) {
+        uint64_t m[2];
+        og_clip_notes(g, atoi(key + 6), m);
+        int w = 0;
+        buf[0] = 0;
+        for (int n = 1; n < 128 && w < buf_len - 5; n++)
+            if ((m[n >> 6] >> (n & 63)) & 1) w += snprintf(buf + w, (size_t)(buf_len - w), w ? ",%d" : "%d", n);
+        return w;
+    }
     if (!strcmp(key, "lq")) return snprintf(buf, (size_t)buf_len, "%d", og_get_launch_quant(g));
     if (!strcmp(key, "fx")) {
         int w = 0;

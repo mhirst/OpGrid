@@ -20,6 +20,17 @@ h.tick(8);
 check(h.call('G steps:0').slice(0, 13) === '1000900010001', `real step flags: ${h.call('G steps:0').slice(0, 16)}`);
 check(h.call('G locks:0:4') === '16=90', `real lock: ${h.call('G locks:0:4')}`);
 
+/* deleting on the real engine: step + Delete, Undo, Delete + pad, Shift + Delete */
+h.note(16 + 8); h.cc(119); h.noteOff(16 + 8); h.tick(8);
+check(h.call('G steps:0')[8] === '0', 'step + Delete clears on the engine');
+h.cc(56); h.tick(8);
+check(h.call('G steps:0')[8] === '1', 'Undo restores it on the engine');
+check(h.call('G notes:0') === '60', `used notes: ${h.call('G notes:0')}`);
+h.midi(0xB0, 49, 127); h.cc(119); h.midi(0xB0, 49, 0); h.tick(8);
+check(!h.call('G steps:0').includes('1'), 'Shift + Delete clears the clip');
+h.cc(56); h.tick(8);
+check(h.call('G steps:0').slice(0, 13) === '1000900010001' && h.call('G locks:0:4') === '16=90', 'Undo brings the clip back with its lock');
+
 /* track 2 becomes FM Perc via the sound library */
 h.files.set('/data/UserData/schwung/modules/overtake/opgrid/sounds.json',
     (await import('fs')).readFileSync(new URL('../module/sounds.json', import.meta.url), 'utf8'));

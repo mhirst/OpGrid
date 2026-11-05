@@ -65,14 +65,29 @@
       "title": "Pads and steps",
       "lines": [
         "Pads: play the track.",
+        "Bright pads: notes in",
+        " this clip.",
         "Up/Down: octave.",
         "Shift+pad 1-16:",
         " select track.",
         "Steps: tap on/off.",
         "Shift+step 1-4:",
         " steps 1-16..49-64.",
-        "Delete+step: clear.",
         "Play: start/stop."
+      ]
+    },
+    {
+      "title": "Deleting",
+      "lines": [
+        "Hold step + Delete,",
+        " or Delete + step:",
+        " clear the step.",
+        "Delete + pad: remove",
+        " that note from the",
+        " whole clip.",
+        "Shift + Delete: clear",
+        " the whole clip.",
+        "Undo: bring it back."
       ]
     },
     {

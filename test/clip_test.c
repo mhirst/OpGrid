@@ -166,6 +166,33 @@ static void test_gapless(void) {
     og_destroy(g);
 }
 
+static void test_note_tools(void) {
+    og_t *g = fresh();
+    put(g, 0, 0, 0, 60); put(g, 0, 0, 4, 64); put(g, 0, 0, 8, 60);
+    og_step_set(g, 0, 8, OG_F_NOTE1, 67);                 /* chord 60+67 */
+    og_lock_set(g, 0, 0, P_FREQ, 9);
+    uint64_t m[2];
+    og_clip_notes(g, 0, m);
+    CHECK((m[0] >> 60 & 1) && (m[1] >> (64 - 64) & 1) && (m[1] >> (67 - 64) & 1) && !(m[1] >> (65 - 64) & 1), "used notes");
+    CHECK(og_clip_remove_note(g, 0, 60) == 2, "60 removed from 2 steps");
+    CHECK(og_step_get(g, 0, 0, OG_F_FLAGS) == 0 && og_lock_get(g, 0, 0, P_FREQ) == -1, "step left empty is cleared with its locks");
+    CHECK((og_step_get(g, 0, 8, OG_F_FLAGS) & OG_STEP_NOTE) && og_step_get(g, 0, 8, OG_F_NOTE0) == 67 && og_step_get(g, 0, 8, OG_F_NOTE1) == 0,
+          "chord keeps its other note");
+    og_clip_set_length(g, 0, 24);
+    og_clip_clear_steps(g, 0);
+    og_clip_notes(g, 0, m);
+    CHECK(!m[0] && !m[1] && og_clip_length(g, 0) == 24, "clear steps keeps length");
+    /* edit follows the clip that starts playing */
+    put(g, 1, 3, 0, 50);
+    og_set_edit_clip(g, 1, 5);
+    og_set_launch_quant(g, 3);
+    og_play(g, 1);
+    og_clip_launch(g, 1, 3);
+    run(g, SL * 17);
+    CHECK(og_get_edit_clip(g, 1) == 3, "edit clip follows the launched clip (%d)", og_get_edit_clip(g, 1));
+    og_destroy(g);
+}
+
 static void test_plugin(void) {
     extern plugin_api_v2_t *move_plugin_init_v2(const host_api_v1_t *host);
     host_api_v1_t host; memset(&host, 0, sizeof(host));
@@ -201,6 +228,7 @@ int main(void) {
     test_scenes_and_stop();
     test_copy_clear_and_first();
     test_gapless();
+    test_note_tools();
     test_plugin();
     if (failures) { printf("%d clip test(s) FAILED\n", failures); return 1; }
     printf("all clip/scene tests passed\n");
