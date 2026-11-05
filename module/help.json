@@ -85,7 +85,19 @@
         " drum tracks, right",
         " pads = 16 pitches.",
         "Menu > KIT: load a",
-        " kit with a groove."
+        " kit with a groove.",
+        "Left/Right: steps",
+        " 1-16, 17-32...",
+        "Hold Loop + step:",
+        " loop length.",
+        "Copy + step, step:",
+        " copy a step.",
+        "Shift+Copy: double",
+        " the clip.",
+        "Delete+track button:",
+        " clear that track.",
+        "Mute+track button:",
+        " mute that track."
       ]
     },
     {

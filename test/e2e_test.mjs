@@ -98,6 +98,33 @@ check(h.call('G step:5:3').split(',').slice(1, 5).join() === '48,51,55,58', `kit
 check(h.ui.state().soundName[0] === 'DUB KICK' && h.call('G tempo').startsWith('118'), `kit sounds + tempo: ${h.ui.state().soundName[0]} ${h.call('G tempo')}`);
 check(h.call('G fx').split(',')[1] === '100', `kit delay feedback: ${h.call('G fx')}`);
 
+/* Move buttons on the real engine (track 1 has the kit's kick: steps 1, 5, 9, 13) */
+h.cc(50); for (let i = 0; i < 20; i++) h.midi(0xB0, 14, 127); h.cc(50);   /* menu closed */
+const st = s => { h.note(16 + s); h.noteOff(16 + s); };
+h.hold(49, true); h.note(68); h.noteOff(68); h.hold(49, false);
+h.hold(58, true); st(7); h.hold(58, false);
+check(h.call('G clip:0').startsWith('8,'), `Loop + step 8: 8-step loop: ${h.call('G clip:0')}`);
+check(!h.ui.state().clipMode, 'holding Loop for a length does not open the clip grid');
+h.hold(60, true); st(0); st(2); h.hold(60, false);
+check(h.call('G steps:0').slice(0, 8) === '10101000', `Copy step 1 -> step 3: ${h.call('G steps:0').slice(0, 8)}`);
+h.hold(49, true); h.cc(60); h.hold(49, false);
+check(h.call('G clip:0').startsWith('16,') && h.call('G steps:0').slice(0, 16) === '1010100010101000', `Shift+Copy duplicates: ${h.call('G clip:0')} ${h.call('G steps:0').slice(0, 16)}`);
+h.cc(55);                                                  /* Up: octave, so Down later is harmless */
+h.hold(119, true); h.cc(43); h.hold(119, false);
+check(h.call('G steps:0').startsWith('0000000000000000'), `Delete + track button clears the clip: ${h.call('G steps:0').slice(0, 16)}`);
+h.cc(56);
+check(h.call('G steps:0').startsWith('1010'), 'Undo brings it back');
+/* NEW PROJECT: every step on every track gone, and Undo cannot bring old notes back */
+h.cc(50);
+const npAt = h.ui.state().menuItems.indexOf('NEW PROJECT');
+for (let i = 0; i < npAt; i++) h.midi(0xB0, 14, 1);
+h.midi(0xB0, 3, 127); h.midi(0xB0, 3, 127);
+h.tick(40);
+h.cc(56);
+let any = 0;
+for (let t = 0; t < 16; t++) if (/[^0]/.test(h.call(`G steps:${t}`))) any++;
+check(any === 0 && /^0+$/.test(h.call('G clips')), `new project has no notes anywhere (${any} tracks, clips ${h.call('G clips').slice(0, 16)})`);
+
 h.stop();
 if (failures) { console.log(`${failures} end-to-end check(s) FAILED`); process.exit(1); }
 console.log('end-to-end (real UI + real engine) passed');

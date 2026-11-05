@@ -2,7 +2,7 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module: four synth machines, a step sequencer with per-step locks and conditions, clip launching, live recording, song mode, effects, and a starter sound library.
 
-**Status: 0.15.1 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
+**Status: 0.16.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
 
 | | | |
 |---|---|---|
@@ -52,7 +52,13 @@ A new project starts with the CLASSIC kit: kick, snare, hat, clap, bass, keys, l
 | Shift + step 1–4 | Show steps 1–16 / 17–32 / 33–48 / 49–64 |
 | Play | Start / stop |
 | Shift + Play | Stop all clips (at the next launch point) |
-| Loop | Clip grid on / off |
+| Loop (tap) | Clip grid on / off |
+| Loop (hold) + step | Loop length: the clip loops up to that step (steps show the length while Loop is held) |
+| Copy + step, then step(s) | Copy a step (with its locks) to other steps |
+| Shift + Copy | Duplicate the clip: it doubles in length with a copy of itself |
+| Left / Right | Steps 1–16 / 17–32 / 33–48 / 49–64 |
+| Delete + track button | Clear that track's clip |
+| Mute + track button | Mute / unmute that track (Shift: solo) |
 | Rec | Arm / disarm recording on the selected track |
 | Shift + Rec | Click: OFF / COUNT-IN / ON |
 | Menu | Project menu (jog to choose, jog click to select) |
@@ -69,7 +75,7 @@ A new project starts with the CLASSIC kit: kick, snare, hat, clap, bass, keys, l
 | Mute (tap) | Mixer mode on / off |
 | Shift + Mute (hold) | Fill mode |
 | Knobs 1–8 | Edit the page's 8 values (Shift = fine) |
-| Jog wheel / Left / Right | Change page: SOUND, SOUND 2, FILTER, AMP, LFO 1–3, DELAY, REVERB, CHORUS, MASTER, MIDI, STEP, CLIP |
+| Jog wheel | Change page: SOUND, SOUND 2, FILTER, AMP, LFO 1–3, DELAY, REVERB, CHORUS, MASTER, MIDI, STEP, CLIP |
 | Shift + jog | Change the track's machine (on a sound page) |
 | Up / Down | Octave |
 | Back | Close the current screen (browser, menu, clip grid, mixer, song view) |
@@ -123,11 +129,11 @@ While the song plays, the clip grid shows what is playing but does not launch; S
 
 ### Projects
 
-**Menu** opens: BROWSE SOUNDS, SAVE Tn SOUND, SAVE (current name), SAVE AS NEW, NEW PROJECT (starts with the starter kit), and LOAD for each saved project. NEW and LOAD ask for a second click. Projects (including songs) are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`, and reopens from it next time.
+**Menu** opens: BROWSE SOUNDS, SAVE Tn SOUND, SAVE (current name), SAVE AS NEW, NEW PROJECT (no notes at all; CLASSIC sounds), LOAD LAST SESSION, the kits, and LOAD for each saved project. NEW and LOAD ask for a second click. Projects (including songs) are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`. Opening OpGrid always starts a clean project; **Menu → LOAD LAST SESSION** brings the last one back.
 
 ### Sounds
 
-**Jog click** on a sound page (or **Menu → BROWSE SOUNDS**) opens the browser: 32 starter sounds in DRUMS, BASS, KEYS, LEAD, PAD and FX, plus your own under USER. Turning the jog loads each sound on the track as you go, so you hear it (play pads or let the pattern run). **Left/Right** changes category, **click** keeps the highlighted sound, **Back** or **Menu** puts the old sound back exactly. The top line of the screen always shows the track's sound; a `*` means you have changed it since loading. **Menu → SAVE Tn SOUND** saves it to `/data/UserData/schwung/opgrid/sounds/` (it appears under USER). A sound is the machine and every sound, LFO and send setting; the track's MIDI routing is kept.
+**Jog click** on a sound page (or **Menu → BROWSE SOUNDS**) opens the browser: 45 starter sounds in DRUMS, BASS, KEYS, LEAD, PAD, FX and DUB, plus your own under USER. Turning the jog loads each sound on the track as you go, so you hear it (play pads or let the pattern run). **Left/Right** changes category, **click** keeps the highlighted sound, **Back** or **Menu** puts the old sound back exactly. The top line of the screen always shows the track's sound; a `*` means you have changed it since loading. **Menu → SAVE Tn SOUND** saves it to `/data/UserData/schwung/opgrid/sounds/` (it appears under USER). A sound is the machine and every sound, LFO and send setting; the track's MIDI routing is kept.
 
 ### Effects
 

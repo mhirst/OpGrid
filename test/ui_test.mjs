@@ -694,11 +694,20 @@ globalThis.__files.delete('/data/UserData/schwung/opgrid/autosave.json');
 midi(0xB0, 72, 1);
 globalThis.onUnload();
 check(globalThis.__files.has('/data/UserData/schwung/opgrid/autosave.json'), 'autosave on unload');
-/* a fresh init restores the autosave */
+/* opening starts clean; the last session is one menu item away */
 dsp.log.length = 0;
 globalThis.init();
 ticks(200);
-check(logHas('reset'), 'init loads the autosave');
+check(!logHas('reset'), 'init does not load the autosave');
+midi(0xB0, 50, 127);
+{
+    const at = ui.state().menuItems.indexOf('LOAD LAST SESSION');
+    check(at > 0, `menu offers the last session: ${ui.state().menuItems}`);
+    for (let i = 0; i < at; i++) midi(0xB0, 14, 1);
+    midi(0xB0, 3, 127); midi(0xB0, 3, 127);
+    ticks(200);
+    check(logHas('reset'), 'LOAD LAST SESSION loads the autosave');
+}
 
 /* shift + pad selects track and pulls its data */
 dsp.params[4] = new Array(64).fill(10); dsp.params[4][61] = 0;

@@ -16,7 +16,8 @@
  *   Shift + Mute      fill mode while held
  *   Play              start / stop
  *   Knobs 1-8         edit the 8 parameters on the current page
- *   Jog / Left/Right  change page
+ *   Jog               change page    Left/Right  steps 1-16 / 17-32 / ...
+ *   Loop (hold)+step  loop length    Copy+step,step  copy a step    Shift+Copy  duplicate clip
  *   Up / Down         octave
  *   Back              leave (music keeps playing)
  */
@@ -246,6 +247,7 @@ const CLIPS = 8;
 
 /* ---------- state ---------- */
 let track = 0, page = 0, octave = 1, stepPage = 0;
+let loopHeld = false, loopUsed = false, copyStep = -1;
 let shift = false, muteHeld = false, muteUsed = false, deleteHeld = false, deleteUsed = false, fillOn = false;
 const usedNotes = new Set();                      /* notes used in the selected track's clip */
 let mixer = false, mixBank = 0;
@@ -679,7 +681,23 @@ function onStep(i, on) {
         if (i < 4 && i * 16 < clipInfo[track].len) { stepPage = i; dirty = true; }
         return;
     }
+    if (on && loopHeld) {
+        /* Loop + step: the clip loops up to this step (as on Move) */
+        loopUsed = true;
+        const len = s + 1;
+        clipInfo[track].len = len;
+        setParam('clen', `${track} ${len}`);
+        showFlash(`LOOP: ${len} STEPS`, 400);
+        return;
+    }
     if (s >= clipInfo[track].len) return;
+    if (on && copyHeld) {
+        /* Copy + step, then another step: paste it there (and on more steps) */
+        if (copyStep < 0) { copyStep = s; showFlash(`COPY STEP ${s + 1}: PICK TARGET`, 600); }
+        else if (s !== copyStep) { snapshotClip('PASTE'); copyStepTo(copyStep, s); showFlash(`STEP ${copyStep + 1} -> ${s + 1}`, 400); }
+        return;
+    }
+    if (!on && copyHeld) return;
     if (on && deleteHeld) {
         deleteUsed = true;
         if (stepFlags[track][s] & (FL_NOTE | FL_LOCK)) {
@@ -719,6 +737,31 @@ function onStep(i, on) {
         stepsDirty = true;
     }
     dirty = true;
+}
+
+function copyStepTo(src, dst, t = track) {
+    const f = ints(getParam(`step:${t}:${src}`));
+    if (f.length < 10 || !f.every(Number.isFinite)) return;
+    setParam('sclr', `${t} ${dst}`);
+    if (!(f[F.FLAGS] & (FL_NOTE | FL_LOCK))) { stepFlags[t][dst] = 0; return; }
+    for (let k = 0; k < f.length; k++) setParam('sf', `${t} ${dst} ${k} ${f[k]}`);
+    const l = getParam(`locks:${t}:${src}`);
+    if (l) for (const kv of `${l}`.split(',')) {
+        const [pid, v] = kv.split('=').map(x => parseInt(x, 10));
+        if (Number.isFinite(pid) && Number.isFinite(v)) setParam('lock', `${t} ${dst} ${pid} ${v}`);
+    }
+    stepsDirty = true;
+}
+
+/* Shift + Copy: duplicate the clip (it doubles, the copy follows), as on Move */
+function duplicateClip() {
+    const len = clipInfo[track].len;
+    if (len > 32) { showFlash('CLIP IS ALREADY 64 STEPS'); return; }
+    snapshotClip('DUPLICATE');
+    for (let s = 0; s < len; s++) copyStepTo(s, s + len);
+    clipInfo[track].len = len * 2;
+    setParam('clen', `${track} ${len * 2}`);
+    showFlash(`DUPLICATED: ${len * 2} STEPS`);
 }
 
 const stepNotesOf = h => (h && h.fields ? [0, 1, 2, 3].map(k => h.fields[F.NOTE0 + k]).filter(n => n > 0) : []);
@@ -900,6 +943,17 @@ globalThis.onMidiMessageInternal = function (data) {
     case CC_SHIFT: shift = press; updateFill(); dirty = true; break;
     case CC_TRACK0: case CC_TRACK0 - 1: case CC_TRACK0 - 2: case CC_TRACK0 - 3:
         /* Move's track buttons: tracks 1-4 of the current group of 4; Shift + button: group 1-4 */
+        if (press && (deleteHeld || muteHeld)) {
+            const t = Math.floor(track / 4) * 4 + (CC_TRACK0 - d1);
+            if (deleteHeld) {                           /* Delete + track: clear its clip */
+                deleteUsed = true;
+                snapshotClip('CLEAR', t);
+                setParam('csclr', `${t}`);
+                if (t === track) { stepsDirty = true; pullSteps(track); }
+                showFlash(`T${t + 1} CLIP CLEARED`);
+            } else { muteUsed = true; if (shift) toggleSolo(t); else toggleMute(t); }   /* Mute + track */
+            break;
+        }
         if (press) {
             const r = CC_TRACK0 - d1, bank = Math.floor(track / 4);
             selectTrack(shift ? r * 4 + (track % 4) : bank * 4 + r);
@@ -933,8 +987,9 @@ globalThis.onMidiMessageInternal = function (data) {
         dirty = true;
         break;
     case CC_COPY:
-        copyHeld = press; if (!press) copySrc = null;
+        copyHeld = press; if (!press) { copySrc = null; copyStep = -1; }
         if (press && songView) songDuplicateRow();
+        else if (press && shift && !clipMode && !mixer && !menuOpen && !browser) duplicateClip();
         dirty = true; break;
     case CC_MENU: if (press) { if (browser) browserCancel(); else toggleMenu(); } break;
     case CC_BACK: if (press) goBack(); break;
@@ -966,8 +1021,13 @@ globalThis.onMidiMessageInternal = function (data) {
         dirty = true;
         break;
     case CC_LOOP:
-        if (press && shift) { toggleSongView(); break; }
-        if (press) { clipMode = !clipMode; if (clipMode) { mixer = false; pullClips(); } dirty = true; }  /* song view stays underneath */
+        if (press && shift) { toggleSongView(); loopHeld = false; break; }
+        /* tap: clip grid. Hold + step: loop length */
+        if (press) { loopHeld = true; loopUsed = false; dirty = true; break; }
+        if (!loopHeld) break;
+        loopHeld = false;
+        if (!loopUsed) { clipMode = !clipMode; if (clipMode) { mixer = false; pullClips(); } }  /* song view stays underneath */
+        dirty = true;
         break;
     case CC_PLAY:
         if (press && shift) { setParam('stopall', 1); pullClips(); dirty = true; break; }
@@ -995,13 +1055,13 @@ globalThis.onMidiMessageInternal = function (data) {
         if (browser) browserCat(-1);
         else if (shift && notePads()) changeKey(-1, 0);
         else if (clipMode) { trackBank = 0; dirty = true; }
-        else if (mixer) { mixBank = 0; dirty = true; } else changePage(-1);
+        else if (mixer) { mixBank = 0; dirty = true; } else if (!menuOpen && !songView) stepPageMove(-1); else changePage(-1);
     } break;
     case CC_RIGHT: if (press) {
         if (browser) browserCat(1);
         else if (shift && notePads()) changeKey(1, 0);
         else if (clipMode) { trackBank = 1; dirty = true; }
-        else if (mixer) { mixBank = 1; dirty = true; } else changePage(1);
+        else if (mixer) { mixBank = 1; dirty = true; } else if (!menuOpen && !songView) stepPageMove(1); else changePage(1);
     } break;
     case CC_UP: if (press) {
         if (clipMode) sceneBank = 0;
@@ -1042,6 +1102,14 @@ function transposeHeld(d) {
     if (shown !== null) showFlash(`STEP PITCH ${pitchText(shown)}`, 400);
     stepsDirty = true;
 }
+/* Left/Right: the 16 steps shown (1-16, 17-32, ...), as on Move */
+function stepPageMove(d) {
+    const pages = Math.max(1, Math.ceil(clipInfo[track].len / 16));
+    const next = clamp(stepPage + d, 0, pages - 1);
+    if (next === stepPage) { showFlash(pages > 1 ? `STEPS ${stepPage * 16 + 1}-${stepPage * 16 + 16}` : 'ONE PAGE: LOOP+STEP SETS LENGTH', 400); return; }
+    stepPage = next;
+    showFlash(`STEPS ${stepPage * 16 + 1}-${stepPage * 16 + 16}`, 400);
+}
 const notePads = () => !clipMode && !mixer && !songView && !menuOpen;
 function changeKey(dRoot, dScale) {
     scaleRoot = (scaleRoot + dRoot + 12) % 12;
@@ -1078,6 +1146,8 @@ function changePage(d) {
 function stepColor(i) {
     const s = stepPage * 16 + i;
     const len = clipInfo[track].len;
+    if (loopHeld) return s === len - 1 ? WHITE : s < len ? trackDim(track) : OFF;
+    if (copyHeld && s === copyStep) return WHITE;
     if (shift) {
         if (i >= 4) return OFF;
         if (i * 16 >= len) return OFF;
@@ -1165,7 +1235,7 @@ function desiredLeds() {
     const bank = Math.floor(track / 4);
     for (let r = 0; r < 4; r++) out.push(['c', CC_TRACK0 - r, bank * 4 + r === track ? WHITE : trackDim(bank * 4 + r)]);
     out.push(['c', CC_MUTE, muteHeld || mixer ? LED_BRIGHT : LED_DIM]);
-    out.push(['c', CC_LOOP, clipMode ? LED_BRIGHT : LED_DIM]);
+    out.push(['c', CC_LOOP, clipMode || loopHeld ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_COPY, copyHeld ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_REC, recArmed ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_CAPTURE, capturing ? LED_BRIGHT : LED_DIM]);
@@ -1859,11 +1929,29 @@ function buildMenu() {
         { label: `SAVE T${track + 1} SOUND`, act: saveSound },
         { label: `SAVE ${projectName}`, act: () => startSave(`${PROJECT_DIR}/${projectName}.json`, projectName) },
         { label: 'SAVE AS NEW', act: () => { projectName = nextProjectName(); startSave(`${PROJECT_DIR}/${projectName}.json`, projectName); } },
-        { label: 'NEW PROJECT', confirm: true, act: () => { setParam('reset', 1); projectName = nextProjectName(); afterReset(); applyDefaultKit(); showFlash('NEW PROJECT'); } },
+        { label: 'NEW PROJECT', confirm: true, act: newProject },
+        ...(hasAutosave() ? [{ label: 'LOAD LAST SESSION', confirm: true, act: () => startLoad(AUTOSAVE) }] : []),
         ...starterKits().map(k => ({ label: `KIT: ${k.name}`, confirm: true, act: () => applyKit(k) })),
         ...listProjects().map(n => ({ label: `LOAD ${n}`, confirm: true, act: () => startLoad(`${PROJECT_DIR}/${n}.json`) })),
     ];
     menuIndex = clamp(menuIndex, 0, menuItems.length - 1);
+}
+
+function hasAutosave() {
+    try { return typeof host_read_file === 'function' && !!host_read_file(AUTOSAVE); } catch (e) { return false; }
+}
+
+/* a clean slate: no notes anywhere, nothing to undo back into */
+function newProject() {
+    setParam('reset', 1);
+    projectName = nextProjectName();
+    lastUndo = null;
+    held.clear();
+    stepPage = 0; octave = 1; scaleRoot = 0; scaleType = 1;
+    for (let t = 0; t < TRACKS; t++) { lastNotes[t] = [60]; for (let k = 0; k < 64; k++) stepFlags[t][k] = 0; }
+    afterReset();
+    applyDefaultKit();
+    showFlash('NEW PROJECT');
 }
 
 function afterReset() {
@@ -1920,8 +2008,9 @@ globalThis.init = function () {
     pullMix();
     pullClips();
     pullRec();
-    /* a fresh start restores the last session, or begins with a starter kit */
-    if (!startLoad(AUTOSAVE, true)) applyDefaultKit();
+    /* opening starts a clean project; the last session stays in Menu > LOAD LAST SESSION */
+    applyDefaultKit();
+    if (hasAutosave()) showFlash('LAST SESSION: IN MENU');
     playing = getParam('play') === '1';
     ledCache.clear();
     dirty = true;

@@ -2,7 +2,7 @@
     "id": "opgrid",
     "name": "OpGrid",
     "abbrev": "OPGR",
-    "version": "0.15.1",
+    "version": "0.16.0",
     "description": "16-track FM groovebox: 4 machines, step locks, clip launching, recording and song mode",
     "author": "OpGrid",
     "ui": "ui.js",
