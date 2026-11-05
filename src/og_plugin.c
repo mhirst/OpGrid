@@ -41,6 +41,8 @@
  *   set "ccopy" "<st> <sc> <dt> <dc>"   "cclr" "<t> <c>"
  *   set "nclr" "<t> <note>"  remove a note from the edit clip   "csclr" "<t>"  clear its steps
  *   get "notes:<t>"          notes used in the edit clip, comma separated
+ *   get "noteat:<t>:<n>"     64 chars: 1 where an edit-clip step plays note n
+ *   get "hits"               16 fired-step counters   "hitn:<t>" last fired notes
  *   get "clips"              128 chars, track-major: OG_CLIP_* state per slot
  *   get "edits"              16 chars: each track's edit clip
  *   get "lq"
@@ -344,6 +346,26 @@ static int plug_get(void *inst, const char *key, char *buf, int buf_len) {
         for (int n = 1; n < 128 && w < buf_len - 5; n++)
             if ((m[n >> 6] >> (n & 63)) & 1) w += snprintf(buf + w, (size_t)(buf_len - w), w ? ",%d" : "%d", n);
         return w;
+    }
+    if (!strncmp(key, "noteat:", 7)) {
+        int t = atoi(key + 7);
+        const char *c2 = strchr(key + 7, ':');
+        if (!c2 || buf_len < 65) return -1;
+        uint64_t m = og_clip_note_steps(g, t, atoi(c2 + 1));
+        for (int s2 = 0; s2 < 64; s2++) buf[s2] = (char)('0' + ((m >> s2) & 1));
+        buf[64] = 0;
+        return 64;
+    }
+    if (!strcmp(key, "hits")) {
+        int w = 0;
+        for (int t = 0; t < OG_TRACKS && w < buf_len - 12; t++)
+            w += snprintf(buf + w, (size_t)(buf_len - w), t ? ",%u" : "%u", og_track_hits(g, t, NULL));
+        return w;
+    }
+    if (!strncmp(key, "hitn:", 5)) {
+        int n[4];
+        og_track_hits(g, atoi(key + 5), n);
+        return snprintf(buf, (size_t)buf_len, "%d,%d,%d,%d", n[0], n[1], n[2], n[3]);
     }
     if (!strcmp(key, "lq")) return snprintf(buf, (size_t)buf_len, "%d", og_get_launch_quant(g));
     if (!strcmp(key, "fx")) {

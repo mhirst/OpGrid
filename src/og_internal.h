@@ -99,6 +99,8 @@ typedef struct {
     int      queued;            /* OG_Q_NONE, OG_Q_STOP or a clip index */
     double   queue_at;          /* global step position to switch at */
     int      edit;              /* clip the UI edits (steps, locks, settings) */
+    unsigned hits;              /* note steps fired (UI flashes pads on change) */
+    uint8_t  hit_notes[4];      /* notes of the last fired step */
 } og_trackseq_t;
 
 typedef struct {

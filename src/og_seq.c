@@ -311,6 +311,25 @@ void og_clip_notes(const og_t *g, int track, uint64_t out[2]) {
     }
 }
 
+/* steps of the edit clip that play this note, one bit per step */
+uint64_t og_clip_note_steps(const og_t *g, int track, int note) {
+    uint64_t m = 0;
+    if (!g || !track_ok(track) || note < 1) return 0;
+    const og_clip_t *c = cur_clip_c(g, track);
+    for (int s = 0; s < c->length && s < 64; s++) {
+        const og_step_t *st = &c->steps[s];
+        if (!(st->flags & OG_STEP_NOTE)) continue;
+        for (int k = 0; k < OG_CHORD; k++) if (st->notes[k] == note) { m |= 1ull << s; break; }
+    }
+    return m;
+}
+
+unsigned og_track_hits(const og_t *g, int track, int notes[4]) {
+    if (!g || !track_ok(track)) return 0;
+    if (notes) for (int k = 0; k < 4; k++) notes[k] = g->ts[track].hit_notes[k];
+    return g->ts[track].hits;
+}
+
 /* remove one note everywhere in the edit clip; steps left with no note are cleared */
 int og_clip_remove_note(og_t *g, int track, int note) {
     if (!g || !track_ok(track)) return 0;
@@ -437,6 +456,8 @@ static void fire(og_t *g, int track, long n, int s, int j, double at) {
         if (rat > 1 && len > 0.75 / rat) len = 0.75 / rat;
         int vel = st->vel - (j * st->vel) / (2 * rat);
         if (vel < 1) vel = 1;
+        ts->hits++;
+        for (int k = 0; k < OG_CHORD && k < 4; k++) ts->hit_notes[k] = (uint8_t)st->notes[k];
         for (int k = 0; k < OG_CHORD; k++) {
             int note = st->notes[k];
             if (!note) continue;

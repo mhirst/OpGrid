@@ -172,6 +172,7 @@ static void test_note_tools(void) {
     og_step_set(g, 0, 8, OG_F_NOTE1, 67);                 /* chord 60+67 */
     og_lock_set(g, 0, 0, P_FREQ, 9);
     uint64_t m[2];
+    CHECK(og_clip_note_steps(g, 0, 60) == ((1ull << 0) | (1ull << 8)) && og_clip_note_steps(g, 0, 67) == (1ull << 8), "steps playing a note");
     og_clip_notes(g, 0, m);
     CHECK((m[0] >> 60 & 1) && (m[1] >> (64 - 64) & 1) && (m[1] >> (67 - 64) & 1) && !(m[1] >> (65 - 64) & 1), "used notes");
     CHECK(og_clip_remove_note(g, 0, 60) == 2, "60 removed from 2 steps");
@@ -190,6 +191,8 @@ static void test_note_tools(void) {
     og_clip_launch(g, 1, 3);
     run(g, SL * 17);
     CHECK(og_get_edit_clip(g, 1) == 3, "edit clip follows the launched clip (%d)", og_get_edit_clip(g, 1));
+    int hn[4];
+    CHECK(og_track_hits(g, 1, hn) > 0 && hn[0] == 50, "hit counter and last notes (%d)", hn[0]);
     og_destroy(g);
 }
 

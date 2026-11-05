@@ -2,12 +2,13 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module: four synth machines, a step sequencer with per-step locks and conditions, clip launching, live recording, song mode, effects, and a starter sound library.
 
-**Status: 0.11.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
+**Status: 0.12.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
 
 | | | |
 |---|---|---|
 | ![FM page](docs/screens/1-fm-page.png) | ![Step locks](docs/screens/2-step-lock.png) | ![Clip grid](docs/screens/5-clip-grid.png) |
-| ![Song view](docs/screens/7-song.png) | ![Mixer](docs/screens/6-mixer.png) | ![FM Perc](docs/screens/10-perc-page.png) |
+| ![Song view](docs/screens/7-song.png) | ![Mixer](docs/screens/6-mixer.png) | ![FM Perc drum grid](docs/screens/10-perc-page.png) |
+| ![Pads in key](docs/screens/11-note-pads.png) | ![STEP page](docs/screens/3-step-page.png) | ![Sounds](docs/screens/9-sounds.png) |
 
 Screens are rendered by `make screens`: the real UI code driving the real engine, drawn with Schwung's 5x7 font and the Move's LED palette.
 
@@ -55,7 +56,11 @@ A new project starts with a kit: kick, snare, hat, clap, bass, keys, lead and pa
 | Menu | Project menu (jog to choose, jog click to select) |
 | Shift + Loop | Song view / song mode on / off |
 | Capture | Capture a live performance as a song |
-| Pads | Play the selected track (rows are a fourth apart). Bright = a note used in this clip, dim = C, dark = unused; holding a step lights its notes white |
+| Pads | Play the selected track in key (rows 3 scale steps apart, like Move and Push). Bright = a note used in this clip, dim = the key's root, dark grey = other notes in key; holding a step lights its notes white |
+| Pad tap | Selects the note new steps get (light grey pad). Steps that play it light bright, other note steps dim |
+| Shift + Left / Right | Key root (C, C#, D …) |
+| Shift + Up / Down | Scale: major, minor, dorian, mixolydian, harmonic minor, pentatonic, minor pentatonic, blues, chromatic |
+| FM Perc tracks | Pads become a drum grid: left 4×4 = tracks 1–16 (tap plays and selects; flashes when it hits), right 4×4 = 16 velocities (sets new steps, or the held step) |
 | Shift + pad (bottom 16) | Select track 1–16 |
 | Mute + pad (bottom 16) | Mute / unmute a track |
 | Mute (tap) | Mixer mode on / off |

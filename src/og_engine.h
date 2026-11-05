@@ -179,6 +179,8 @@ int   og_get_edit_clip(const og_t *g, int track);
 void  og_clip_copy(og_t *g, int st, int sc, int dt, int dc);
 void  og_clip_clear(og_t *g, int track, int clip);
 void  og_clip_notes(const og_t *g, int track, uint64_t out[2]);   /* notes used in the edit clip */
+uint64_t og_clip_note_steps(const og_t *g, int track, int note);  /* edit-clip steps playing a note */
+unsigned og_track_hits(const og_t *g, int track, int notes[4]);   /* fired-step counter + last notes */
 int   og_clip_remove_note(og_t *g, int track, int note);          /* returns steps changed */
 void  og_clip_clear_steps(og_t *g, int track);                    /* keeps length/speed/swing */
 

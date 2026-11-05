@@ -298,7 +298,7 @@ midi(0x90, 20, 100);
 midi(0x90, 70, 90); midi(0x90, 71, 90);
 midi(0x80, 70, 0); midi(0x80, 71, 0);
 midi(0x80, 20, 0);
-check(dsp.steps[0][4][1] === 50 && dsp.steps[0][4][2] === 51, `chord notes: ${dsp.steps[0][4].slice(1, 5)}`);
+check(dsp.steps[0][4][1] === 52 && dsp.steps[0][4][2] === 53, `chord notes: ${dsp.steps[0][4].slice(1, 5)}`);
 
 /* STEP page: hold step, knob 7 (COND) */
 jogTo(12);
@@ -318,7 +318,7 @@ check(dsp.steps[0][4][0] === 2, `type lock-only: flags ${dsp.steps[0][4][0]}`);
 /* step defaults when nothing held */
 midi(0xB0, 72, 5);                                           /* NOTE default +5 */
 midi(0x90, 25, 100); midi(0x80, 25, 0);
-check(dsp.steps[0][9][1] === 65, `new step uses default note: ${dsp.steps[0][9][1]}`);
+check(dsp.steps[0][9][1] === ui.state().selNote[0] && ui.state().selNote[0] > 0, `new step uses selected note: ${dsp.steps[0][9][1]}`);
 
 /* Delete + step clears */
 midi(0xB0, 119, 127); midi(0x90, 25, 100); midi(0x80, 25, 0); midi(0xB0, 119, 0);
@@ -602,7 +602,7 @@ midi(0xB0, 119, 127); midi(0x90, 16 + 8, 100); midi(0x80, 16 + 8, 0); midi(0xB0,
 check(!(dsp.steps[T][8][0] & 1), 'Delete + step clears it');
 /* Delete + pad removes that note everywhere */
 const NOTE = dsp.steps[T][0][1];                              /* whatever new steps got */
-const notePad = [...Array(32).keys()].find(i => { const r = Math.floor(i / 8), c = i % 8; return 36 + ui.state().octave * 12 + c + r * 5 === NOTE; });
+const notePad = [...Array(32).keys()].find(i => ui.padToNote(i) === NOTE);
 midi(0xB0, 119, 127); midi(0x90, 68 + notePad, 100); midi(0x80, 68 + notePad, 0); midi(0xB0, 119, 0);
 check(![0, 4].some(st => dsp.steps[T][st][0] & 1) && logHas('nclr', T, NOTE), 'Delete + pad removes the note from the clip');
 midi(0xB0, 56, 127);
@@ -619,7 +619,7 @@ globalThis.onResume();
 ticks(30);
 const ledOf = n => { let c; for (const [k, id, col] of globalThis.__leds) if (k === 'n' && id === n) c = col; return c; };
 const usedCol = ledOf(68 + notePad);
-const otherPad = notePad + 1;
+const otherPad = [...Array(32).keys()].find(i => i !== notePad && ui.padToNote(i) !== ui.state().selNote[T] && ui.padToNote(i) % 12 !== 0 && ![0, 4].some(st => dsp.steps[T][st][1] === ui.padToNote(i)));
 check(usedCol !== undefined && usedCol !== ledOf(68 + otherPad), `used-note pad lit differently (${usedCol} vs ${ledOf(68 + otherPad)})`);
 check(ledOf(68 + otherPad) >= 65, `unused pads use a dark shade (${ledOf(68 + otherPad)})`);
 dsp.useJsonDumps = false;
@@ -693,11 +693,46 @@ midi(0x90, 70, 90);
 check(sets[0]?.[1].startsWith('4 '), `pad plays selected track: ${JSON.stringify(sets[0])}`);
 midi(0xB0, 55, 127);
 midi(0x80, 70, 0);
-check(lastSet('lnoff')?.[1] === '4 50', `held note released after octave change: ${JSON.stringify(lastSet('lnoff'))}`);
+check(lastSet('lnoff')?.[1] === '4 52', `held note released after octave change: ${JSON.stringify(lastSet('lnoff'))}`);
 
 sets.length = 0;
 midi(0x90, 3, 127);
 check(sets.length === 0, 'knob touch ignored');
+midi(0x80, 3, 0);
+
+/* pads: in key by default, tap selects the note; Shift + arrows change the key */
+{
+    const o = ui.state().octave;
+    midi(0xB0, 54, 127); midi(0xB0, 54, 0);                  /* undo the octave change above */
+    const base = 36 + ui.state().octave * 12;
+    check(ui.padToNote(0) === base && ui.padToNote(1) === base + 2 && ui.padToNote(8) === base + 5, `C major grid: ${ui.padToNote(1)} ${ui.padToNote(8)}`);
+    midi(0x90, 68 + 2, 90); midi(0x80, 68 + 2, 0);
+    check(ui.state().selNote[4] === base + 4, `pad tap selects note: ${ui.state().selNote[4]}`);
+    midi(0xB0, 49, 127); midi(0xB0, 63, 127); midi(0xB0, 63, 0); midi(0xB0, 54, 127); midi(0xB0, 54, 0); midi(0xB0, 49, 0);
+    check(ui.state().scaleRoot === 1 && ui.state().scaleType === 1 && ui.state().octave === o - 1, `Shift+Right/Down: root ${ui.state().scaleRoot} scale ${ui.state().scaleType}`);
+    check(ui.padToNote(0) === base + 1 && ui.padToNote(1) === base + 3, `C# minor grid: ${ui.padToNote(1)}`);
+    midi(0xB0, 49, 127); midi(0xB0, 62, 127); midi(0xB0, 62, 0); midi(0xB0, 55, 127); midi(0xB0, 55, 0); midi(0xB0, 49, 0);
+    check(ui.state().scaleRoot === 0 && ui.state().scaleType === 0, 'key back to C major');
+}
+
+/* FM Perc track: drum grid. Left 4x4 = tracks, right 4x4 = velocities */
+{
+    dsp.params[4][61] = 1; ui.values[4][61] = 1;
+    sets.length = 0;
+    midi(0x90, 68 + 9, 100);                                  /* row 1, col 1 -> track 6 */
+    check(sets.some(([k, v]) => k === 'lnon' && v.startsWith('5 ')) && ui.state().track === 5, `drum pad plays + selects track 6: ${JSON.stringify(sets[0])} t${ui.state().track}`);
+    midi(0x80, 68 + 9, 0);
+    check(lastSet('lnoff')?.[1].startsWith('5 '), 'drum pad releases its note');
+    midi(0xB0, 49, 127); midi(0x90, 68 + 4, 100); midi(0xB0, 49, 0);   /* back to track 5 */
+    dsp.params[4][61] = 1; ui.values[4][61] = 1;
+    sets.length = 0;
+    midi(0x90, 68 + 31, 100); midi(0x80, 68 + 31, 0);      /* top-right velocity pad = 127 */
+    midi(0x90, 68 + 4, 100); midi(0x80, 68 + 4, 0);        /* bottom-left velocity pad = 7 */
+    check(sets.some(([k, v]) => k === 'lnon' && v === `4 ${ui.state().selNote[4]} 127`), `velocity pad plays at 127: ${JSON.stringify(sets)}`);
+    midi(0x90, 16 + 1, 100); midi(0x80, 16 + 1, 0);
+    check(dsp.steps[4][1][5] === 7, `new step takes the velocity pad: ${dsp.steps[4][1][5]}`);
+    dsp.params[4][61] = 0; ui.values[4][61] = 0;
+}
 
 /* every page draws cleanly, with and without a held step */
 for (let p = 0; p < ui.PAGES.length; p++) {

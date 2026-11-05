@@ -88,7 +88,7 @@ const h = await startHost();
 const { ui } = h;
 globalThis.init();
 h.tick(60);
-const jogTo = p => { let n = 0; while (ui.state().page !== p && n++ < 20) h.midi(0xB0, 14, 1); };
+const jogTo = p => { let n = 0; while (ui.state().page !== p && n++ < 30) h.midi(0xB0, 14, ui.state().page > p ? 127 : 1); };
 const pad = (i, v = 100) => { h.note(68 + i, v); h.noteOff(68 + i); };
 const step = i => { h.note(16 + i); h.noteOff(16 + i); };
 const settle = () => h.tick(80);
@@ -104,6 +104,12 @@ h.cc(85);                                                      /* play */
 settle();
 jogTo(0); h.knob(0, 1); h.tick(8);
 render(h, '1-fm-page', 'FM page, playing (algo shown while turned)');
+
+h.hold(49, true); h.cc(63); h.cc(63); h.cc(54); h.hold(49, false);  /* key: D minor */
+pad(10);                                                       /* select a note */
+h.tick(12);
+render(h, '11-note-pads', 'Pads in key (D minor): root, used, selected');
+h.hold(49, true); h.cc(62); h.cc(62); h.cc(55); h.hold(49, false);
 
 jogTo(2);
 h.note(16 + 4);                                                /* hold step 5 */
@@ -165,11 +171,11 @@ h.midi(0xB0, 14, 1); h.midi(0xB0, 14, 1);
 h.midi(0xB0, 3, 127);                                          /* load the 3rd starter sound */
 h.tick(12);
 render(h, '9-sounds', 'Sound list: click loads, list stays open');
-h.cc(50);
+h.cc(50); h.tick(4); if (h.ui.state().menuOpen) h.cc(50);
 /* the loaded sound is FM Perc: its own page */
 jogTo(0);
 h.knob(0, 1);
 h.tick(700);
-render(h, '10-perc-page', 'FM Perc machine page');
+render(h, '10-perc-page', 'FM Perc: pads become a drum grid');
 
 h.stop();
