@@ -728,9 +728,16 @@ midi(0x80, 3, 0);
     sets.length = 0;
     midi(0x90, 68 + 31, 100); midi(0x80, 68 + 31, 0);      /* top-right velocity pad = 127 */
     midi(0x90, 68 + 4, 100); midi(0x80, 68 + 4, 0);        /* bottom-left velocity pad = 7 */
-    check(sets.some(([k, v]) => k === 'lnon' && v === `4 ${ui.state().selNote[4]} 127`), `velocity pad plays at 127: ${JSON.stringify(sets)}`);
+    check(sets.some(([k, v]) => k === 'lnon' && v === `4 60 127`), `velocity pad plays at 127: ${JSON.stringify(sets)}`);
     midi(0x90, 16 + 1, 100); midi(0x80, 16 + 1, 0);
     check(dsp.steps[4][1][5] === 7, `new step takes the velocity pad: ${dsp.steps[4][1][5]}`);
+    check(dsp.steps[4][1][1] === 60, `drum steps use the drum's own pitch (60): ${dsp.steps[4][1][1]}`);
+    midi(0x90, 16 + 1, 100); midi(0xB0, 55, 127); midi(0xB0, 55, 0); midi(0xB0, 55, 127); midi(0xB0, 55, 0); midi(0x80, 16 + 1, 0);
+    check(dsp.steps[4][1][1] === 62 && dsp.steps[4][1][0] & 1, `hold step + Up transposes it: ${dsp.steps[4][1][1]}`);
+    jogTo(0);
+    sets.length = 0;
+    midi(0xB0, 71, 127);
+    check(sets.some(([k, v]) => k === 'p' && v.startsWith('4 10 ')), `drum page knob 1 = PTCH: ${JSON.stringify(sets)}`);
     dsp.params[4][61] = 0; ui.values[4][61] = 0;
 }
 

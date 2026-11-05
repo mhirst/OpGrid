@@ -24,7 +24,7 @@ const P = {
 /* machine param names -> ids 0..11 */
 const M = {
     poly: { id: 0, ALGO: 0, RAT1: 1, RAT2: 2, RAT3: 3, RAT4: 4, LVL2: 5, LVL3: 6, LVL4: 7, FDBK: 8, DEC2: 9, DEC3: 10, DEC4: 11 },
-    perc: { id: 1, SWP: 0, SWPT: 1, RAT: 2, FM: 3, FMD: 4, NOIS: 5, NDEC: 6, COLR: 7, FDBK: 8, CLIK: 9 },
+    perc: { id: 1, SWP: 0, SWPT: 1, RAT: 2, FM: 3, FMD: 4, NOIS: 5, NDEC: 6, COLR: 7, FDBK: 8, CLIK: 9, PTCH: 10 },
     morph: { id: 2, WAVA: 0, WAVB: 1, MIX: 2, PD: 3, TUNB: 4, RING: 5, NOIS: 6, DRFT: 7, SUBL: 8, SUBO: 9 },
     stack: { id: 3, WAVE: 0, VOIC: 1, DTUN: 2, ANIM: 3, SUBL: 4, SUBO: 5, NOIS: 6, MIX: 7 },
 };
@@ -68,9 +68,9 @@ function sound(name, machine, mp, shared = {}) {
 
 const SOUNDS = [
     /* drums: FM Perc */
-    sound('KICK DEEP', 'perc', { SWP: 75, SWPT: 62, FM: 10, FMD: 50 }, { ADEC: 86, VOL: 118 }),
-    sound('KICK PUNCH', 'perc', { SWP: 92, SWPT: 52, FM: 40, FMD: 45, CLIK: 70 }, { ADEC: 80, VOL: 118 }),
-    sound('KICK LONG', 'perc', { SWP: 60, SWPT: 70, FM: 6 }, { ADEC: 96, VOL: 115 }),
+    sound('KICK DEEP', 'perc', { PTCH: 31, SWP: 75, SWPT: 62, FM: 10, FMD: 50 }, { ADEC: 86, VOL: 118 }),
+    sound('KICK PUNCH', 'perc', { PTCH: 36, SWP: 92, SWPT: 52, FM: 40, FMD: 45, CLIK: 70 }, { ADEC: 80, VOL: 118 }),
+    sound('KICK LONG', 'perc', { PTCH: 28, SWP: 60, SWPT: 70, FM: 6 }, { ADEC: 96, VOL: 115 }),
     sound('SNARE', 'perc', { SWP: 30, SWPT: 50, FM: 20, NOIS: 110, NDEC: 74, COLR: 92, CLIK: 80 }, { ADEC: 78, VOL: 100 }),
     sound('CLAP', 'perc', { SWP: 0, FM: 0, NOIS: 127, NDEC: 72, COLR: 84, CLIK: 70 },
         { FTYP: FT.HP, FREQ: 82, RESO: 20, ADEC: 76, VOL: 127, SREV: 30 }),
@@ -78,7 +78,7 @@ const SOUNDS = [
         { FTYP: FT.HP, FREQ: 104, ADEC: 60, VOL: 90, PAN: 80 }),
     sound('HAT OPEN', 'perc', { SWP: 0, FM: 0, NOIS: 127, NDEC: 80, COLR: 124 },
         { FTYP: FT.HP, FREQ: 102, ADEC: 84, VOL: 84, PAN: 80 }),
-    sound('TOM', 'perc', { SWP: 40, SWPT: 74, FM: 15, FMD: 60 }, { ADEC: 86, VOL: 105 }),
+    sound('TOM', 'perc', { PTCH: 45, SWP: 40, SWPT: 74, FM: 15, FMD: 60 }, { ADEC: 86, VOL: 105 }),
     sound('RIM', 'perc', { SWP: 20, SWPT: 40, RAT: R[4], FM: 90, FMD: 40, CLIK: 100 }, { ADEC: 60, VOL: 100 }),
     sound('METAL', 'perc', { SWP: 0, RAT: R[14], FM: 90, FMD: 76, FDBK: 40 },
         { FTYP: FT.HP, FREQ: 70, RESO: 30, ADEC: 80, VOL: 120 }),

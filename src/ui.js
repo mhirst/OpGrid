@@ -136,7 +136,8 @@ const MACH_PARAMS = [
         ['RAT', 'FM ratio', 21, 3, ratio], ['FM', 'FM amount', 127, 30, pct],
         ['FMD', 'FM decay', 127, 50, envTime], ['NOIS', 'Noise level', 127, 0, pct],
         ['NDEC', 'Noise decay', 127, 55, envTime], ['COLR', 'Noise tone', 127, 64, signed(64)],
-        ['FDBK', 'Body feedback', 127, 0, pct], ['CLIK', 'Click level', 127, 0, pct], none, none ],
+        ['FDBK', 'Body feedback', 127, 0, pct], ['CLIK', 'Click level', 127, 0, pct],
+        ['PTCH', 'Drum pitch', 127, 60, v => { const f = 440 * Math.pow(2, ((v < 12 ? 60 : v) - 69) / 12); return f >= 1000 ? `${(f / 1000).toFixed(1)}k` : hz(f); }], none ],
     [   ['WAVA', 'Osc A wave', 127, 0, v => MWAVES[Math.round(v / 127 * 7)]],
         ['WAVB', 'Osc B wave', 127, 36, v => MWAVES[Math.round(v / 127 * 7)]],
         ['MIX', 'Mix of A and B', 127, 0, pct], ['PD', 'Phase distortion', 127, 0, pct],
@@ -175,7 +176,7 @@ const PAGE_KNOBS = [
 ];
 const isKnobPage = p => p < PAGE_KNOBS.length;
 const isFxPage = p => p >= PAGE_DELAY && p <= PAGE_MASTER;
-const MACH_TITLES = [['FM OPERATORS', 'FM DECAY+TUNE'], ['DRUM BODY', 'DRUM MORE'],
+const MACH_TITLES = [['FM OPERATORS', 'FM DECAY+TUNE'], ['DRUM BODY', 'DRUM NOISE'],
     ['OSCILLATORS', 'SUB + TUNE'], ['STACK', 'TUNE + MORE']];
 const PAGE_TITLES = ['', '', 'FILTER', 'AMP', 'LFO 1', 'LFO 2', 'LFO 3',
     'DELAY', 'REVERB', 'CHORUS', 'MASTER', 'MIDI OUT', 'STEP', 'CLIP'];
@@ -217,7 +218,7 @@ const noteName = n => n <= 0 ? '--' : `${NOTE_NAMES[n % 12]}${Math.floor(n / 12)
 /* STEP page: [name, max, min, formatter] — knob 0 is TYPE, 7 is SLIDE */
 const STEP_KNOBS = [
     ['TYPE', 1, 0, v => v ? 'LOCK' : 'NOTE'],
-    ['NOTE', 127, 1, noteName],
+    ['NOTE', 127, 1, n => pitchText(n)],          /* drums: semitones from the drum's pitch */
     ['VEL', 127, 1, num],
     ['LEN', LENS.length - 1, 0, v => LENS[v]],
     ['MICR', 23, -23, v => v > 0 ? `+${v}` : `${v}`],
@@ -273,6 +274,8 @@ let playheads = new Array(TRACKS).fill(-1);
 const held = new Map();
 const stepDefaults = { vel: 100, len: 4 };
 const selNote = new Array(TRACKS).fill(60);       /* note a new step gets (pad tap selects it) */
+const drumNote = new Array(TRACKS).fill(60);      /* drums: a new step's note, 60 = the drum's own pitch */
+const stepNote = t => (machineOf(t) === 1 ? drumNote : selNote)[t];
 
 /* ---------- pad layouts: in-key note grid, or a drum grid for FM Perc ---------- */
 const SCALES = [['MAJOR', [0, 2, 4, 5, 7, 9, 11]], ['MINOR', [0, 2, 3, 5, 7, 8, 10]],
@@ -328,6 +331,8 @@ function pullTrack(t) {
         for (let i = 0; i < NPARAMS && i < parts.length; i++)
             if (Number.isFinite(parts[i])) values[t][i] = parts[i];
         for (let i = 0; i < NPARAMS; i++) values[t][i] = clamp(values[t][i] | 0, 0, pdef(t, i)[2]);
+        /* drums saved before PTCH existed: start at the old pitch */
+        if (machineOf(t) === 1 && values[t][10] < 12) { values[t][10] = 60; setParam('p', `${t} 10 60`); }
     }
     pullClip(t);
     pullSteps(t);
@@ -467,7 +472,12 @@ function firstHeld() {
 }
 
 /* the knob slot under knob k on the current page */
-function knobRef(k) { return isKnobPage(page) ? PAGE_KNOBS[page][k] : null; }
+/* drums: pitch first, then the body; noise on the second page */
+const PERC_KNOBS = [[10, 0, 1, 2, 3, 4, 8, 9].map(p => ({ p })), [5, 6, 7, null, 12, 13, 14, 15].map(p => (p === null ? null : { p }))];
+function knobRef(k) {
+    if (page < 2 && machineOf(track) === 1) return PERC_KNOBS[page][k];
+    return isKnobPage(page) ? PAGE_KNOBS[page][k] : null;
+}
 
 /* everything the screen needs to show one knob slot */
 function refInfo(ref, hs) {
@@ -550,7 +560,7 @@ function editStep(knob, delta) {
     touch(knob);
     if (!held.size) {
         /* no step held: edit the defaults used for new steps */
-        if (knob === 1) { selNote[track] = clamp(selNote[track] + delta, 1, 127); pullSelMask(); }
+        if (knob === 1) { const a = machineOf(track) === 1 ? drumNote : selNote; a[track] = clamp(a[track] + delta, 1, 127); pullSelMask(); }
         if (knob === 2) stepDefaults.vel = clamp(stepDefaults.vel + delta, 1, 127);
         if (knob === 3) stepDefaults.len = clamp(stepDefaults.len + delta, 0, LENS.length - 1);
         return;
@@ -692,7 +702,7 @@ function onStep(i, on) {
         if (!existed) {
             setParam('sclr', `${track} ${s}`);
             setParam('sf', `${track} ${s} ${F.FLAGS} ${FL_NOTE}`);
-            setParam('sf', `${track} ${s} ${F.NOTE0} ${selNote[track]}`);
+            setParam('sf', `${track} ${s} ${F.NOTE0} ${stepNote(track)}`);
             setParam('sf', `${track} ${s} ${F.VEL} ${stepDefaults.vel}`);
             setParam('sf', `${track} ${s} ${F.LEN} ${stepDefaults.len}`);
             stepFlags[track][s] = FL_NOTE;
@@ -720,7 +730,7 @@ function releaseHeldSteps() {
 /* ---------- pads ---------- */
 function padToNote(i) {
     const row = Math.floor(i / 8), col = i % 8;
-    if (drumLayout()) return col < 4 ? selNote[row * 4 + col] : -1;
+    if (drumLayout()) return col < 4 ? stepNote(row * 4 + col) : -1;
     const base = 36 + octave * 12 + scaleRoot, sc = SCALES[scaleType][1];
     if (!sc) return base + col + row * 5;                       /* chromatic: rows a fourth apart */
     const deg = col + row * 3;                                   /* in key: rows 3 scale steps apart */
@@ -777,11 +787,11 @@ function onDrumPad(i, vel, on) {
             }
         } else stepDefaults.vel = v;
         showFlash(`VELOCITY ${v}`, 300);
-        padNoteOn(i, track, selNote[track], v, held.size === 0);
+        padNoteOn(i, track, stepNote(track), v, held.size === 0);
         return;
     }
-    if (held.size) { if (t === track) padNoteOn(i, t, selNote[t], vel, false); return; }
-    padNoteOn(i, t, selNote[t], vel, true);
+    if (held.size) { if (t === track) padNoteOn(i, t, stepNote(t), vel, false); return; }
+    padNoteOn(i, t, stepNote(t), vel, true);
     if (t !== track) selectTrack(t);
 }
 
@@ -967,12 +977,14 @@ globalThis.onMidiMessageInternal = function (data) {
     } break;
     case CC_UP: if (press) {
         if (clipMode) sceneBank = 0;
+        else if (held.size) transposeHeld(shift ? 12 : 1);
         else if (shift && notePads()) changeKey(0, -1);
         else octave = Math.min(6, octave + 1);
         dirty = true;
     } break;
     case CC_DOWN: if (press) {
         if (clipMode) sceneBank = 1;
+        else if (held.size) transposeHeld(shift ? -12 : -1);
         else if (shift && notePads()) changeKey(0, 1);
         else octave = Math.max(-2, octave - 1);
         dirty = true;
@@ -983,6 +995,25 @@ globalThis.onMidiMessageInternal = function (data) {
 
 globalThis.onMidiMessageExternal = function () { /* DSP handles external notes */ };
 
+/* hold step(s) + Up/Down: transpose them a semitone (Shift: an octave) */
+const pitchText = n => drumLayout() ? `${n - 60 > 0 ? '+' : ''}${n - 60}` : noteName(n);
+function transposeHeld(d) {
+    let shown = null;
+    for (const [s, h] of held) {
+        if (!h.fields || !(h.fields[F.FLAGS] & FL_NOTE)) continue;
+        for (let k = 0; k < 4; k++) {
+            const n = h.fields[F.NOTE0 + k];
+            if (!n) continue;
+            const v = clamp(n + d, 1, 127);
+            h.fields[F.NOTE0 + k] = v;
+            setParam('sf', `${track} ${s} ${F.NOTE0 + k} ${v}`);
+            if (k === 0) shown = v;
+        }
+        h.edited = true;
+    }
+    if (shown !== null) showFlash(`STEP PITCH ${pitchText(shown)}`, 400);
+    stepsDirty = true;
+}
 const notePads = () => !clipMode && !mixer && !songView && !menuOpen;
 function changeKey(dRoot, dScale) {
     scaleRoot = (scaleRoot + dRoot + 12) % 12;
@@ -1234,7 +1265,7 @@ function drawBody(hs, hot) {
         }
     } else if (page === PAGE_STEP) {
         if (!hs) {
-            drawCell(1, 'NOTE', noteName(selNote[track]), null, hot(1), false);
+            drawCell(1, drumLayout() ? 'PTCH' : 'NOTE', pitchText(stepNote(track)), null, hot(1), false);
             drawCell(2, 'VEL', `${stepDefaults.vel}`, stepDefaults.vel / 127, hot(2), false);
             drawCell(3, 'LEN', LENS[stepDefaults.len], null, hot(3), false);
             print(2, 42, 'New-step defaults.', 1);
@@ -1245,7 +1276,7 @@ function drawBody(hs, hot) {
                 const v = stepKnobValue(hs[1], k);
                 /* a chord shows as "+N" after the root note */
                 const text = k === 1 && chord ? `${fmt(v)}+${chord}` : fmt(v);
-                drawCell(k, name, text, max - min > 1 ? (v - min) / (max - min) : null, hot(k), false);
+                drawCell(k, k === 1 && drumLayout() ? 'PTCH' : name, text, max - min > 1 ? (v - min) / (max - min) : null, hot(k), false);
             });
         }
     } else {
@@ -1507,7 +1538,7 @@ function startSave(path, name, sync = false) {
     tasks.push(() => {
         pullClips(); pullMix(); pullRec(); pullFx(); pullTransport();
         Object.assign(data, { tempo, sync: sync_(), lq: launchQ, recQuant, recMode, click: clickMode, fx: [...fxValues],
-            key: [scaleRoot, scaleType], selNotes: [...selNote] });
+            key: [scaleRoot, scaleType], selNotes: [...selNote], drumNotes: [...drumNote] });
     });
     for (let t = 0; t < TRACKS; t++) {
         tasks.push(() => {
@@ -1560,6 +1591,7 @@ function startLoad(path, quiet = false) {
         if (Number.isFinite(data.recMode)) setParam('rmode', data.recMode);
         if (Number.isFinite(data.click)) setParam('click', data.click);
         if (Array.isArray(data.key)) { scaleRoot = clamp(data.key[0] | 0, 0, 11); scaleType = clamp(data.key[1] | 0, 0, SCALES.length - 1); }
+        if (Array.isArray(data.drumNotes)) data.drumNotes.forEach((n, t) => { if (t < TRACKS && n > 0 && n < 128) drumNote[t] = n | 0; });
         if (Array.isArray(data.selNotes)) data.selNotes.forEach((n, t) => { if (t < TRACKS && n > 0 && n < 128) selNote[t] = n | 0; });
         (data.fx || []).forEach((v, i) => { if (Number.isFinite(v)) setParam('fx', `${i} ${v}`); });
     });
@@ -1898,7 +1930,7 @@ globalThis.__opgrid = {
     PARAMS, MACH_PARAMS, MACHINES, PAGES, CONDS, LENS, SPEEDS, FX, DEST_NAMES, WAVES, SYNC_RATES, fxValues, solo,
     values, stepFlags, clipInfo, held, padToNote,
     clipStates, editClips, LAUNCH_QS,
-    state: () => ({ track, page, octave, scaleRoot, scaleType, selNote: [...selNote], shift, playing, stepPage, tempo, sync, mixer, mixBank,
+    state: () => ({ track, page, octave, scaleRoot, scaleType, selNote: [...selNote], drumNote: [...drumNote], shift, playing, stepPage, tempo, sync, mixer, mixBank,
         clipMode, trackBank, sceneBank, launchQ, recArmed, countingIn, growTrack, recQuant, recMode,
         browser: browser ? { cat: browser.cats[browser.ci].name, item: browser.cats[browser.ci].items[browser.ii].name } : null,
         soundName: [...soundName], soundEdited: [...soundEdited], touchHeld,

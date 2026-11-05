@@ -24,9 +24,9 @@ typedef struct { int def, max; } mp_t;
 static const mp_t k_mp[OG_MACHINES][OG_MACH_PARAMS] = {
     /* FM Poly: filled from og_param_* at lookup */
     { {0, 0} },
-    /* FM Perc: SWP, SWPT, RAT, FM, FMD, NOIS, NDEC, NCOL | FDBK, CLIK, -, - */
+    /* FM Perc: SWP, SWPT, RAT, FM, FMD, NOIS, NDEC, NCOL | FDBK, CLIK, PTCH, - */
     { {40, 127}, {55, 127}, {3, 21}, {30, 127}, {50, 127}, {0, 127}, {55, 127}, {64, 127},
-      {0, 127}, {0, 127}, {0, 0}, {0, 0} },
+      {0, 127}, {0, 127}, {60, 127}, {0, 0} },
     /* Morph: WAVA, WAVB, MIX, PD, TUNB, RING, NOIS, DRFT | SUBL, SUBO, -, - */
     { {0, 127}, {36, 127}, {0, 127}, {0, 127}, {64, 127}, {0, 127}, {0, 127}, {0, 127},
       {0, 127}, {0, 1}, {0, 0}, {0, 0} },

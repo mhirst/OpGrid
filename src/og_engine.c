@@ -228,6 +228,8 @@ static void voice_start(og_t *g, voice_t *v, int track, int note, int vel,
     v->pending = 0;
 
     v->target = (float)note + (float)(p[P_TUNE] - 24);
+    /* drums: PTCH sets the pitch a step's default note (C3 = 60) plays at */
+    if (p[P_MACH] == OG_MACH_PERC) v->target += (float)((p[10] < 12 ? 60 : p[10]) - 60);
     float last = g->last_pitch[track];
     v->pitch = ((p[P_GLID] > 0 || slide) && last >= 0.0f) ? last : v->target;
     g->last_pitch[track] = v->target;

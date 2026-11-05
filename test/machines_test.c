@@ -113,6 +113,28 @@ static void test_character(void) {
     CHECK(a.rms > 0.01 && b.rms < a.rms * 0.01, "Perc decays without a note off (%.4f -> %.6f)", a.rms, b.rms);
     og_destroy(g);
 
+    /* Perc PTCH: note 60 plays at the drum's pitch; a lower PTCH = fewer zero crossings */
+    {
+        int zc[2];
+        for (int k = 0; k < 2; k++) {
+            og_t *d = og_create(SR);
+            og_set_machine(d, 0, OG_MACH_PERC);
+            og_set_param(d, 0, 0, 0); og_set_param(d, 0, 3, 0);      /* no sweep, no FM: a plain tone */
+            og_set_param(d, 0, 10, k ? 36 : 60);
+            og_note_on(d, 0, 60, 127);
+            float buf[2 * 4096];
+            og_render_float(d, buf, 4096);
+            zc[k] = 0;
+            for (int i = 2; i < 2 * 4096; i += 2) if ((buf[i] >= 0) != (buf[i - 2] >= 0)) zc[k]++;
+            og_destroy(d);
+        }
+        CHECK(zc[1] * 3 < zc[0] && zc[1] > 0, "PTCH 36 is two octaves under 60 (%d vs %d crossings)", zc[1], zc[0]);
+        og_t *d = og_create(SR);
+        og_set_machine(d, 0, OG_MACH_PERC);
+        CHECK(og_get_param(d, 0, 10) == 60, "PTCH defaults to 60 (%d)", og_get_param(d, 0, 10));
+        og_destroy(d);
+    }
+
     /* Stack: more copies -> a wider (different) sound, still similar level */
     og_t *s1 = og_create(SR), *s8 = og_create(SR);
     og_set_machine(s1, 0, OG_MACH_STACK); og_set_param(s1, 0, 1, 0);
