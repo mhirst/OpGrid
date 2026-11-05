@@ -2,7 +2,7 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module: four synth machines, a step sequencer with per-step locks and conditions, clip launching, live recording, song mode, effects, and a starter sound library.
 
-**Status: 0.13.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
+**Status: 0.14.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
 
 | | | |
 |---|---|---|
@@ -42,7 +42,8 @@ A new project starts with a kit: kick, snare, hat, clap, bass, keys, lead and pa
 |---|---|
 | Step buttons | Toggle steps on the selected track |
 | Hold step + knob | Lock that value on the step (sound pages), or edit the step (STEP page) |
-| Hold step + pad | Set the step's note; more pads add a chord (up to 4 notes) |
+| Hold step + pad | Toggle that note in the step (a chord holds up to 4 notes); on a new step the first pad replaces its note |
+| Hold pads + step | Place the held chord on the step |
 | Hold step + Up / Down | Transpose the step a semitone (Shift: an octave). Drums show it as +/- semitones from the drum's pitch |
 | Delete + step, or hold step + Delete | Clear the step and its locks |
 | Delete + pad | Remove that note from the whole clip |
@@ -58,7 +59,7 @@ A new project starts with a kit: kick, snare, hat, clap, bass, keys, lead and pa
 | Shift + Loop | Song view / song mode on / off |
 | Capture | Capture a live performance as a song |
 | Pads | Play the selected track in key (rows 3 scale steps apart, like Move and Push). Bright = a note used in this clip, dim = the key's root, dark grey = other notes in key; holding a step lights its notes white |
-| Pad tap | Selects the note new steps get (light grey pad). Steps that play it light bright, other note steps dim |
+| Pad tap | Selects a note (light grey pad). Pressing a step adds it (to any notes already there); tapping a step that has it removes just that note. Steps that play it light bright, other note steps dim |
 | Shift + Left / Right | Key root (C, C#, D …) |
 | Shift + Up / Down | Scale: major, minor, dorian, mixolydian, harmonic minor, pentatonic, minor pentatonic, blues, chromatic |
 | Drum pitch | FM Perc's first knob is **PTCH**: the drum's pitch in Hz. Drum steps play at that pitch; you never need the keyboard for drums |

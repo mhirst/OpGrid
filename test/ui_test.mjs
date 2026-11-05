@@ -298,7 +298,30 @@ midi(0x90, 20, 100);
 midi(0x90, 70, 90); midi(0x90, 71, 90);
 midi(0x80, 70, 0); midi(0x80, 71, 0);
 midi(0x80, 20, 0);
-check(dsp.steps[0][4][1] === 52 && dsp.steps[0][4][2] === 53, `chord notes: ${dsp.steps[0][4].slice(1, 5)}`);
+check(dsp.steps[0][4].slice(1, 5).includes(52) && dsp.steps[0][4].slice(1, 5).includes(53), `hold step + pads adds chord notes: ${dsp.steps[0][4].slice(1, 5)}`);
+/* Move-style melodic steps: a step press adds the selected note; a quick tap takes just it away */
+{
+    const notes = st => dsp.steps[0][st].slice(1, 5).filter(n => n > 0).sort((x, y) => x - y);
+    midi(0x90, 68 + 2, 90); midi(0x80, 68 + 2, 0);                     /* select pad 2 (E) */
+    const e = ui.state().selNote[0];
+    midi(0x90, 16 + 12, 100); midi(0x80, 16 + 12, 0);
+    check(notes(12).join() === `${e}`, `step gets the selected note: ${notes(12)}`);
+    midi(0x90, 68 + 4, 90); midi(0x80, 68 + 4, 0);                     /* select pad 4 (G) */
+    const gn = ui.state().selNote[0];
+    midi(0x90, 16 + 12, 100); midi(0x80, 16 + 12, 0);
+    check(notes(12).join() === `${e},${gn}` && dsp.steps[0][12][0] & 1, `pressing a step with another note adds a chord: ${notes(12)}`);
+    midi(0x90, 16 + 12, 100); midi(0x80, 16 + 12, 0);
+    check(notes(12).join() === `${e}` && dsp.steps[0][12][0] & 1, `quick tap removes only the selected note: ${notes(12)}`);
+    midi(0x90, 68 + 2, 90); midi(0x90, 16 + 12, 100); midi(0x80, 16 + 12, 0); midi(0x80, 68 + 2, 0);
+    check(!(dsp.steps[0][12][0] & 1), 'removing the last note clears the step');
+    midi(0x90, 68 + 0, 90); midi(0x90, 68 + 2, 90); midi(0x90, 68 + 4, 90);
+    midi(0x90, 16 + 13, 100); midi(0x80, 16 + 13, 0);
+    midi(0x80, 68 + 0, 0); midi(0x80, 68 + 2, 0); midi(0x80, 68 + 4, 0);
+    check(notes(13).length === 3, `pads held + step = chord step: ${notes(13)}`);
+    midi(0x90, 16 + 13, 100); midi(0x90, 68 + 2, 90); midi(0x80, 68 + 2, 0); midi(0x80, 16 + 13, 0);
+    check(notes(13).length === 2 && dsp.steps[0][13][0] & 1, `hold step + pad toggles a note out: ${notes(13)}`);
+    midi(0xB0, 119, 127); midi(0x90, 16 + 13, 100); midi(0x80, 16 + 13, 0); midi(0xB0, 119, 0);
+}
 
 /* STEP page: hold step, knob 7 (COND) */
 jogTo(12);

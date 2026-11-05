@@ -699,27 +699,61 @@ function onStep(i, on) {
     }
     if (on) {
         const existed = (stepFlags[track][s] & (FL_NOTE | FL_LOCK)) !== 0;
+        /* synths: a step press places the selected note, or the chord held on the pads */
+        const ns = drumLayout() ? [stepNote(track)] : entryNotes();
         if (!existed) {
             setParam('sclr', `${track} ${s}`);
             setParam('sf', `${track} ${s} ${F.FLAGS} ${FL_NOTE}`);
-            setParam('sf', `${track} ${s} ${F.NOTE0} ${stepNote(track)}`);
+            writeStepNotes(s, null, ns);
             setParam('sf', `${track} ${s} ${F.VEL} ${stepDefaults.vel}`);
             setParam('sf', `${track} ${s} ${F.LEN} ${stepDefaults.len}`);
             stepFlags[track][s] = FL_NOTE;
+            stepsDirty = true;
         }
-        held.set(s, { existed, edited: false, fields: null, locks: new Map(), chord: 0 });
+        const h = { existed, edited: false, fields: null, locks: new Map(), chord: 0, toggle: null };
+        held.set(s, h);
         pullStepDetail(s);
+        if (existed && !drumLayout() && (stepFlags[track][s] & FL_NOTE)) {
+            /* a step with other notes gets these added (a chord); one that has them
+             * loses just them on a quick tap */
+            const cur = stepNotesOf(h), missing = ns.filter(n => !cur.includes(n));
+            if (missing.length) {
+                writeStepNotes(s, h, [...cur, ...missing].slice(-4));
+                h.edited = true;
+                stepsDirty = true;
+                showFlash(`ADDED ${missing.map(noteName).join(' ')}`, 300);
+            } else h.toggle = ns;
+        }
     } else {
         const h = held.get(s);
         if (!h) return;
         held.delete(s);
-        if (h.existed && !h.edited) {
+        const left = h.toggle ? stepNotesOf(h).filter(n => !h.toggle.includes(n)) : [];
+        if (h.existed && !h.edited && left.length) {
+            writeStepNotes(s, null, left);                  /* chord: only the selected note goes */
+        } else if ((h.existed && !h.edited) || (h.fields && (h.fields[F.FLAGS] & FL_NOTE) && !stepNotesOf(h).length)) {
             setParam('sclr', `${track} ${s}`);
             stepFlags[track][s] = 0;
         }
         stepsDirty = true;
     }
     dirty = true;
+}
+
+/* the notes a step press places: pads held on this track (a chord), else the selected note */
+function entryNotes() {
+    const ns = [];
+    for (let i = 0; i < PADS; i++)
+        if (padNote[i] >= 0 && padTrack[i] === track && !ns.includes(padNote[i])) ns.push(padNote[i]);
+    return ns.length ? ns.slice(0, 4) : [stepNote(track)];
+}
+const stepNotesOf = h => (h && h.fields ? [0, 1, 2, 3].map(k => h.fields[F.NOTE0 + k]).filter(n => n > 0) : []);
+function writeStepNotes(s, h, notes) {
+    for (let k = 0; k < 4; k++) {
+        const v = notes[k] || 0;
+        setParam('sf', `${track} ${s} ${F.NOTE0 + k} ${v}`);
+        if (h && h.fields) h.fields[F.NOTE0 + k] = v;
+    }
 }
 
 function releaseHeldSteps() {
@@ -741,15 +775,23 @@ const drumTrack = i => (i % 8) < 4 ? Math.floor(i / 8) * 4 + (i % 8) : -1;
 const drumVel = i => (i % 8) >= 4 ? Math.floor(i / 8) * 4 + (i % 8) - 4 : -1;
 
 function setHeldNote(n) {
-    /* first pad replaces the held steps' notes, more pads add a chord */
+    /* hold step + pad toggles that note in the step (a new step's first pad replaces its note) */
     for (const [s, h] of held) {
-        const slot = Math.min(h.chord, 3);
-        if (slot === 0) for (let k = 1; k < 4; k++) setParam('sf', `${track} ${s} ${F.NOTE0 + k} 0`);
-        setParam('sf', `${track} ${s} ${F.NOTE0 + slot} ${n}`);
-        if (h.fields) h.fields[F.NOTE0 + slot] = n;
+        let cur = stepNotesOf(h);
+        if (!h.existed && !h.chord) cur = [n];
+        else if (cur.includes(n)) cur = cur.filter(x => x !== n);
+        else cur = cur.length >= 4 ? [...cur.slice(0, 3), n] : [...cur, n];
+        if (h.fields && !(h.fields[F.FLAGS] & FL_NOTE)) {
+            const fl = (h.fields[F.FLAGS] & FL_SLIDE) | FL_NOTE;
+            setParam('sf', `${track} ${s} ${F.FLAGS} ${fl}`);
+            h.fields[F.FLAGS] = fl;
+            stepFlags[track][s] = (stepFlags[track][s] & ~FL_LOCK) | FL_NOTE;
+        }
+        writeStepNotes(s, h, cur);
         h.chord++;
         h.edited = true;
     }
+    stepsDirty = true;
     dirty = true;
 }
 
@@ -829,7 +871,7 @@ function onPad(i, vel, on) {
         const n = padToNote(i);
         if (n > 127) return;
         if (held.size) setHeldNote(n);
-        else if (selNote[track] !== n) { selNote[track] = n; pullSelMask(); dirty = true; }
+        else if (selNote[track] !== n) { selNote[track] = n; pullSelMask(); showFlash(`NOTE ${noteName(n)}`, 250); }
         padNoteOn(i, track, n, vel, held.size === 0);   /* auditioning a held step is never recorded */
     } else if (padNote[i] >= 0) {
         setParam('lnoff', `${padTrack[i]} ${padNote[i]}`);
