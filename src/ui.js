@@ -1090,7 +1090,7 @@ function stepColor(i) {
     /* note layout: steps playing the selected note are bright, other notes dim */
     if (f & FL_NOTE) return trackBright(track);
     if (f & FL_LOCK) return GREY;
-    return i % 4 === 0 ? DARK : OFF;
+    return OFF;                                        /* empty: unlit, as on Move */
 }
 
 function clipPadColor(i) {
