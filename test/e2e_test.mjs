@@ -1,7 +1,9 @@
 /* End to end: the real UI (src/ui.js) driving the real engine through
  * tools/bridge. Builds a little project, saves it, resets, loads it back
  * and checks the engine state round-trips. */
-import { startHost } from '../tools/realhost.mjs';
+import fs from 'fs';
+import path from 'path';
+import { startHost, root } from '../tools/realhost.mjs';
 
 let failures = 0;
 const check = (c, m) => { if (!c) { failures++; console.log('FAIL', m); } };
@@ -72,7 +74,8 @@ check(!!file, 'project saved');
 h.call('S reset\t1');
 check(h.call('G steps:0').startsWith('0000'), 'engine reset');
 h.cc(50);
-for (let i = 0; i < 5; i++) h.midi(0xB0, 14, 1);
+const loadAt = h.ui.state().menuItems.findIndex(m => m.startsWith('LOAD '));
+for (let i = 0; i < loadAt; i++) h.midi(0xB0, 14, 1);
 h.midi(0xB0, 3, 127); h.midi(0xB0, 3, 127);            /* LOAD, confirm */
 h.tick(400);
 const after = {
@@ -81,6 +84,19 @@ const after = {
     sdump: h.call('G sdump:0'),
 };
 for (const k of Object.keys(before)) check(before[k] === after[k], `${k} round-trips: ${before[k].slice(0, 40)} vs ${after[k].slice(0, 40)}`);
+
+/* the DUB TECHNO kit: sounds, effects, tempo and a groove, on the real engine */
+h.files.set('/data/UserData/schwung/modules/overtake/opgrid/sounds.json', fs.readFileSync(path.join(root, 'module/sounds.json'), 'utf8'));
+h.cc(50);
+const kitAt = h.ui.state().menuItems.indexOf('KIT: DUB TECHNO');
+check(kitAt > 0, `kit in menu: ${h.ui.state().menuItems}`);
+for (let i = 0; i < kitAt; i++) h.midi(0xB0, 14, 1);
+h.midi(0xB0, 3, 127); h.midi(0xB0, 3, 127);
+h.tick(40);
+check(h.call('G steps:0').startsWith('1000100010001000'), `kit kick groove: ${h.call('G steps:0').slice(0, 16)}`);
+check(h.call('G step:5:3').split(',').slice(1, 5).join() === '48,51,55,58', `kit chord: ${h.call('G step:5:3')}`);
+check(h.ui.state().soundName[0] === 'DUB KICK' && h.call('G tempo').startsWith('118'), `kit sounds + tempo: ${h.ui.state().soundName[0]} ${h.call('G tempo')}`);
+check(h.call('G fx').split(',')[1] === '100', `kit delay feedback: ${h.call('G fx')}`);
 
 h.stop();
 if (failures) { console.log(`${failures} end-to-end check(s) FAILED`); process.exit(1); }

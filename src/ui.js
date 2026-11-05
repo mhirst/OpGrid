@@ -29,6 +29,7 @@ const PAD0 = 68, PADS = 32, STEP0 = 16, STEPS = 16;
 const KNOB0 = 71, JOG = 14;
 const CC_SHIFT = 49, CC_DOWN = 54, CC_UP = 55, CC_LEFT = 62, CC_RIGHT = 63, CC_BACK = 51;
 const CC_PLAY = 85, CC_MUTE = 88, CC_DELETE = 119, CC_COPY = 60, CC_LOOP = 58;
+const CC_TRACK0 = 43;                     /* Move's track buttons: 43 (top) .. 40 */
 const CC_REC = 86, CC_UNDO = 56, CC_MENU = 50, JOG_CLICK = 3, CC_CAPTURE = 52;
 const WHITE = 120, GREY = 124, DARK = 119, OFF = 0, LED_BRIGHT = 127, LED_DIM = 16;
 
@@ -273,30 +274,25 @@ let playheads = new Array(TRACKS).fill(-1);
 /* held steps: step index -> { existed, edited, fields[], locks Map(pid->val), chordCount } */
 const held = new Map();
 const stepDefaults = { vel: 100, len: 4 };
-const selNote = new Array(TRACKS).fill(60);       /* note a new step gets (pad tap selects it) */
-const drumNote = new Array(TRACKS).fill(60);      /* drums: a new step's note, 60 = the drum's own pitch */
-const stepNote = t => (machineOf(t) === 1 ? drumNote : selNote)[t];
+/* Move-style note entry: a step press places the last notes played on the pads */
+const lastNotes = Array.from({ length: TRACKS }, () => [60]);
+const stepNote = t => lastNotes[t][0];
 
-/* ---------- pad layouts: in-key note grid, or a drum grid for FM Perc ---------- */
+/* ---------- pad layouts (as on Move): in-key keyboard, or a drum grid for FM Perc ---------- */
 const SCALES = [['MAJOR', [0, 2, 4, 5, 7, 9, 11]], ['MINOR', [0, 2, 3, 5, 7, 8, 10]],
     ['DORIAN', [0, 2, 3, 5, 7, 9, 10]], ['MIXOLYDIAN', [0, 2, 4, 5, 7, 9, 10]],
     ['HARM MINOR', [0, 2, 3, 5, 7, 8, 11]], ['PENTATONIC', [0, 2, 4, 7, 9]],
     ['MIN PENTA', [0, 3, 5, 7, 10]], ['BLUES', [0, 3, 5, 6, 7, 10]], ['CHROMATIC', null]];
-let scaleRoot = 0, scaleType = 0;
-const OFFWHITE = 122;
-const padTrack = new Array(PADS).fill(-1);       /* track a pad's note went to */
+let scaleRoot = 0, scaleType = 1;                 /* C minor */
+const SCALE_NOTE = 123, WHITE_DIM = 122;                           /* dim white: a note in the key */
+const padTrack = new Array(PADS).fill(-1);        /* track a pad's note went to */
 const hitCount = new Array(TRACKS).fill(0), hitUntil = new Array(TRACKS).fill(0);
 let hitNotes = [], hitNotesUntil = 0;
-let selMask = '';                                 /* steps of the clip playing selNote */
 const HIT_TICKS = 30;
-const VEL_OF = k => (k + 1) * 8 - 1;               /* the 16 velocity pads: 7..127 */
-const drumLayout = () => machineOf(track) === 1;
+const isDrum = t => machineOf(t) === 1;
+const drumLayout = () => isDrum(track);
 const inScale = n => { const sc = SCALES[scaleType][1]; return !sc || sc.includes(((n - scaleRoot) % 12 + 12) % 12); };
 const keyName = () => `${NOTE_NAMES[scaleRoot]} ${SCALES[scaleType][0]}`;
-function pullSelMask() {
-    const m = getParam(`noteat:${track}:${selNote[track]}`);
-    selMask = m && m.length >= 64 ? m : '';
-}
 function pullHits() {
     const h = ints(getParam('hits'));
     if (h.length !== TRACKS) return;
@@ -351,7 +347,6 @@ function pullSteps(t) {
     if (t === track) {
         usedNotes.clear();
         for (const n of ints(getParam(`notes:${t}`))) if (Number.isFinite(n)) usedNotes.add(n);
-        pullSelMask();
     }
     stepsDirty = false;
 }
@@ -560,7 +555,7 @@ function editStep(knob, delta) {
     touch(knob);
     if (!held.size) {
         /* no step held: edit the defaults used for new steps */
-        if (knob === 1) { const a = machineOf(track) === 1 ? drumNote : selNote; a[track] = clamp(a[track] + delta, 1, 127); pullSelMask(); }
+        if (knob === 1) lastNotes[track] = lastNotes[track].map(n => clamp(n + delta, 1, 127));
         if (knob === 2) stepDefaults.vel = clamp(stepDefaults.vel + delta, 1, 127);
         if (knob === 3) stepDefaults.len = clamp(stepDefaults.len + delta, 0, LENS.length - 1);
         return;
@@ -698,40 +693,26 @@ function onStep(i, on) {
         return;
     }
     if (on) {
+        /* empty step: place the last notes played on the pads. A filled step: hold to edit
+         * it (knobs, pads), or tap to clear it. */
         const existed = (stepFlags[track][s] & (FL_NOTE | FL_LOCK)) !== 0;
-        /* synths: a step press places the selected note, or the chord held on the pads */
-        const ns = drumLayout() ? [stepNote(track)] : entryNotes();
         if (!existed) {
             setParam('sclr', `${track} ${s}`);
             setParam('sf', `${track} ${s} ${F.FLAGS} ${FL_NOTE}`);
-            writeStepNotes(s, null, ns);
+            writeStepNotes(s, null, lastNotes[track]);
             setParam('sf', `${track} ${s} ${F.VEL} ${stepDefaults.vel}`);
             setParam('sf', `${track} ${s} ${F.LEN} ${stepDefaults.len}`);
             stepFlags[track][s] = FL_NOTE;
             stepsDirty = true;
         }
-        const h = { existed, edited: false, fields: null, locks: new Map(), chord: 0, toggle: null };
-        held.set(s, h);
+        held.set(s, { existed, edited: false, fields: null, locks: new Map() });
         pullStepDetail(s);
-        if (existed && !drumLayout() && (stepFlags[track][s] & FL_NOTE)) {
-            /* a step with other notes gets these added (a chord); one that has them
-             * loses just them on a quick tap */
-            const cur = stepNotesOf(h), missing = ns.filter(n => !cur.includes(n));
-            if (missing.length) {
-                writeStepNotes(s, h, [...cur, ...missing].slice(-4));
-                h.edited = true;
-                stepsDirty = true;
-                showFlash(`ADDED ${missing.map(noteName).join(' ')}`, 300);
-            } else h.toggle = ns;
-        }
     } else {
         const h = held.get(s);
         if (!h) return;
         held.delete(s);
-        const left = h.toggle ? stepNotesOf(h).filter(n => !h.toggle.includes(n)) : [];
-        if (h.existed && !h.edited && left.length) {
-            writeStepNotes(s, null, left);                  /* chord: only the selected note goes */
-        } else if ((h.existed && !h.edited) || (h.fields && (h.fields[F.FLAGS] & FL_NOTE) && !stepNotesOf(h).length)) {
+        const noNotes = h.fields && (h.fields[F.FLAGS] & FL_NOTE) && !stepNotesOf(h).length;
+        if ((h.existed && !h.edited) || noNotes) {
             setParam('sclr', `${track} ${s}`);
             stepFlags[track][s] = 0;
         }
@@ -740,13 +721,6 @@ function onStep(i, on) {
     dirty = true;
 }
 
-/* the notes a step press places: pads held on this track (a chord), else the selected note */
-function entryNotes() {
-    const ns = [];
-    for (let i = 0; i < PADS; i++)
-        if (padNote[i] >= 0 && padTrack[i] === track && !ns.includes(padNote[i])) ns.push(padNote[i]);
-    return ns.length ? ns.slice(0, 4) : [stepNote(track)];
-}
 const stepNotesOf = h => (h && h.fields ? [0, 1, 2, 3].map(k => h.fields[F.NOTE0 + k]).filter(n => n > 0) : []);
 function writeStepNotes(s, h, notes) {
     for (let k = 0; k < 4; k++) {
@@ -764,36 +738,16 @@ function releaseHeldSteps() {
 /* ---------- pads ---------- */
 function padToNote(i) {
     const row = Math.floor(i / 8), col = i % 8;
-    if (drumLayout()) return col < 4 ? stepNote(row * 4 + col) : -1;
+    if (drumLayout()) return col < 4 ? 60 : 60 + drumPitch(i);
     const base = 36 + octave * 12 + scaleRoot, sc = SCALES[scaleType][1];
     if (!sc) return base + col + row * 5;                       /* chromatic: rows a fourth apart */
-    const deg = col + row * 3;                                   /* in key: rows 3 scale steps apart */
+    const deg = col + row * 3;                                   /* in key: rows a fourth apart */
     return base + 12 * Math.floor(deg / sc.length) + sc[deg % sc.length];
 }
-/* drum grid: left 4x4 = tracks 1-16 (bottom-left first), right 4x4 = 16 velocities */
+/* drum grid: left 4x4 = the drum tracks (track 1 bottom-left), right 4x4 = 16 pitches of the
+ * selected drum (bottom-left = its own pitch, then up a semitone per pad) */
 const drumTrack = i => (i % 8) < 4 ? Math.floor(i / 8) * 4 + (i % 8) : -1;
-const drumVel = i => (i % 8) >= 4 ? Math.floor(i / 8) * 4 + (i % 8) - 4 : -1;
-
-function setHeldNote(n) {
-    /* hold step + pad toggles that note in the step (a new step's first pad replaces its note) */
-    for (const [s, h] of held) {
-        let cur = stepNotesOf(h);
-        if (!h.existed && !h.chord) cur = [n];
-        else if (cur.includes(n)) cur = cur.filter(x => x !== n);
-        else cur = cur.length >= 4 ? [...cur.slice(0, 3), n] : [...cur, n];
-        if (h.fields && !(h.fields[F.FLAGS] & FL_NOTE)) {
-            const fl = (h.fields[F.FLAGS] & FL_SLIDE) | FL_NOTE;
-            setParam('sf', `${track} ${s} ${F.FLAGS} ${fl}`);
-            h.fields[F.FLAGS] = fl;
-            stepFlags[track][s] = (stepFlags[track][s] & ~FL_LOCK) | FL_NOTE;
-        }
-        writeStepNotes(s, h, cur);
-        h.chord++;
-        h.edited = true;
-    }
-    stepsDirty = true;
-    dirty = true;
-}
+const drumPitch = i => (i % 8) >= 4 ? Math.floor(i / 8) * 4 + (i % 8) - 4 : -1;
 
 function padNoteOn(i, t, n, vel, live) {
     if (padNote[i] >= 0) setParam(live ? 'lnoff' : 'noff', `${padTrack[i]} ${padNote[i]}`);
@@ -802,13 +756,45 @@ function padNoteOn(i, t, n, vel, live) {
     setParam(live ? 'lnon' : 'non', `${t} ${n} ${Math.max(1, vel)}`);
     if (live && recArmed && playing) stepsDirty = true;
 }
+function padNoteOff(i) {
+    if (padNote[i] < 0) return;
+    setParam('lnoff', `${padTrack[i]} ${padNote[i]}`);
+    padNote[i] = -1;
+}
+
+/* remember what was played: one pad = that note, pads held together = a chord */
+function rememberNote(t, n) {
+    let chord = false;
+    for (let i = 0; i < PADS; i++) if (padNote[i] >= 0 && padTrack[i] === t && padNote[i] !== n) chord = true;
+    if (chord && !lastNotes[t].includes(n)) lastNotes[t] = [...lastNotes[t], n].slice(-4);
+    else if (!chord) lastNotes[t] = [n];
+}
+
+/* holding steps: a pad adds its note to them, or takes it out if it is there */
+function toggleHeldNote(n, mono) {
+    for (const [s, h] of held) {
+        if (!h.fields) continue;
+        let cur = stepNotesOf(h);
+        if (mono) cur = [n];
+        else if (cur.includes(n)) cur = cur.filter(x => x !== n);
+        else cur = cur.length >= 4 ? [...cur.slice(1), n] : [...cur, n];
+        if (!(h.fields[F.FLAGS] & FL_NOTE)) {
+            const fl = (h.fields[F.FLAGS] & FL_SLIDE) | FL_NOTE;
+            setParam('sf', `${track} ${s} ${F.FLAGS} ${fl}`);
+            h.fields[F.FLAGS] = fl;
+            stepFlags[track][s] = FL_NOTE;
+        }
+        writeStepNotes(s, h, cur);
+        h.edited = true;
+    }
+    stepsDirty = true;
+    dirty = true;
+}
 
 function onDrumPad(i, vel, on) {
-    const t = drumTrack(i), k = drumVel(i);
-    if (!on) {
-        if (padNote[i] >= 0) { setParam('lnoff', `${padTrack[i]} ${padNote[i]}`); padNote[i] = -1; }
-        return;
-    }
+    if (!on) { padNoteOff(i); return; }
+    const t = drumTrack(i), k = drumPitch(i);
+    if (t >= 0 && !isDrum(t)) return;                  /* only drum tracks sit on the grid */
     if (deleteHeld) {
         deleteUsed = true;
         if (t < 0) return;
@@ -818,23 +804,20 @@ function onDrumPad(i, vel, on) {
         showFlash(`T${t + 1} STEPS CLEARED`);
         return;
     }
-    if (k >= 0) {
-        /* velocity pads: set the held steps' velocity, else the one new steps get */
-        const v = VEL_OF(k);
-        if (held.size) {
-            for (const [s, h] of held) {
-                setParam('sf', `${track} ${s} ${F.VEL} ${v}`);
-                if (h.fields) h.fields[F.VEL] = v;
-                h.edited = true;
-            }
-        } else stepDefaults.vel = v;
-        showFlash(`VELOCITY ${v}`, 300);
-        padNoteOn(i, track, stepNote(track), v, held.size === 0);
+    if (held.size) {
+        /* holding steps: a pitch pad sets their pitch; the drum's own pad plays it */
+        if (k >= 0) toggleHeldNote(60 + k, true);
+        if (k >= 0 || t === track) padNoteOn(i, track, k >= 0 ? 60 + k : 60, vel, false);
         return;
     }
-    if (held.size) { if (t === track) padNoteOn(i, t, stepNote(t), vel, false); return; }
-    padNoteOn(i, t, stepNote(t), vel, true);
+    if (k >= 0) {
+        padNoteOn(i, track, 60 + k, vel, true);
+        lastNotes[track] = [60 + k];
+        return;
+    }
     if (t !== track) selectTrack(t);
+    padNoteOn(i, t, 60, vel, true);
+    lastNotes[t] = [60];
 }
 
 function onPad(i, vel, on) {
@@ -853,11 +836,13 @@ function onPad(i, vel, on) {
         if (i < 16) toggleMute(i);
         return;
     }
-    if (drumLayout() || (!on && padTrack[i] >= 0 && padTrack[i] !== track)) { onDrumPad(i, vel, on); return; }
-    if (on && deleteHeld) {
+    if (!on) { padNoteOff(i); return; }
+    if (drumLayout()) { onDrumPad(i, vel, on); return; }
+    const n = padToNote(i);
+    if (n > 127 || n < 0) return;
+    if (deleteHeld) {
         /* Delete + pad: take that note out of the whole clip */
         deleteUsed = true;
-        const n = padToNote(i);
         if (usedNotes.has(n)) {
             snapshotClip('DELETE');
             setParam('nclr', `${track} ${n}`);
@@ -867,16 +852,9 @@ function onPad(i, vel, on) {
         } else showFlash(`NO ${noteName(n)} IN CLIP`);
         return;
     }
-    if (on) {
-        const n = padToNote(i);
-        if (n > 127) return;
-        if (held.size) setHeldNote(n);
-        else if (selNote[track] !== n) { selNote[track] = n; pullSelMask(); showFlash(`NOTE ${noteName(n)}`, 250); }
-        padNoteOn(i, track, n, vel, held.size === 0);   /* auditioning a held step is never recorded */
-    } else if (padNote[i] >= 0) {
-        setParam('lnoff', `${padTrack[i]} ${padNote[i]}`);
-        padNote[i] = -1;
-    }
+    if (held.size) { toggleHeldNote(n, false); padNoteOn(i, track, n, vel, false); return; }
+    padNoteOn(i, track, n, vel, true);
+    rememberNote(track, n);
 }
 
 /* ---------- MIDI in ---------- */
@@ -920,6 +898,14 @@ globalThis.onMidiMessageInternal = function (data) {
     const press = d2 > 0;
     switch (d1) {
     case CC_SHIFT: shift = press; updateFill(); dirty = true; break;
+    case CC_TRACK0: case CC_TRACK0 - 1: case CC_TRACK0 - 2: case CC_TRACK0 - 3:
+        /* Move's track buttons: tracks 1-4 of the current group of 4; Shift + button: group 1-4 */
+        if (press) {
+            const r = CC_TRACK0 - d1, bank = Math.floor(track / 4);
+            selectTrack(shift ? r * 4 + (track % 4) : bank * 4 + r);
+            showFlash(`T${track + 1}: ${soundName[track]}`, 300);
+        }
+        break;
     case CC_MUTE:
         if (press) { muteHeld = true; muteUsed = shift; }
         else {
@@ -1102,7 +1088,7 @@ function stepColor(i) {
     if (playing && playheads[track] === s) return WHITE;
     const f = stepFlags[track][s];
     /* note layout: steps playing the selected note are bright, other notes dim */
-    if (f & FL_NOTE) return drumLayout() || !selMask || selMask[s] === '1' ? trackBright(track) : trackDim(track);
+    if (f & FL_NOTE) return trackBright(track);
     if (f & FL_LOCK) return GREY;
     return i % 4 === 0 ? DARK : OFF;
 }
@@ -1143,34 +1129,29 @@ function padColor(i) {
     if (drumLayout()) return drumPadColor(i);
     const n = padToNote(i);
     if (n > 127 || n < 0) return OFF;
-    if (tickCount < hitNotesUntil && hitNotes.includes(n)) return WHITE;     /* sounding now */
     /* holding a step: its notes light white */
     const hs = firstHeld();
-    if (hs && hs[1].fields && [F.NOTE0, F.NOTE1, F.NOTE2, F.NOTE3].some(f => hs[1].fields[f] === n)) return WHITE;
+    if (hs && hs[1].fields && stepNotesOf(hs[1]).includes(n)) return WHITE;
+    if (tickCount < hitNotesUntil && hitNotes.includes(n)) return WHITE;     /* playing now */
     if (deleteHeld) return usedNotes.has(n) ? trackBright(track) : OFF;   /* what Delete + pad would remove */
-    if (!hs && n === selNote[track]) return OFFWHITE;
-    /* bright = used in this clip; dim = the key's root; dark grey = other notes in key */
-    if (usedNotes.has(n)) return trackBright(track);
-    const pc = ((n - scaleRoot) % 12 + 12) % 12;
-    if (pc === 0) return trackDim(track);
-    return inScale(n) ? DARK : OFF;
+    /* as on Move: the key's root in the track colour, other notes in the key dim white */
+    if (((n - scaleRoot) % 12 + 12) % 12 === 0) return trackBright(track);
+    return inScale(n) ? SCALE_NOTE : OFF;
 }
 
 function drumPadColor(i) {
     const t = drumTrack(i);
     if (t >= 0) {
+        if (!isDrum(t)) return OFF;
         if (tickCount < hitUntil[t]) return WHITE;
-        if (clipInfo[t].mute) return deleteHeld ? OFF : DARK;
-        const has = clipState(t, editClips[t]) !== CS_EMPTY;
-        if (deleteHeld) return has ? trackBright(t) : OFF;
-        if (t === track) return trackBright(t);
-        return has ? trackDim(t) : trackFaint(t);
+        if (deleteHeld) return clipState(t, editClips[t]) !== CS_EMPTY ? trackBright(t) : OFF;
+        if (clipInfo[t].mute) return DARK;
+        return t === track ? WHITE_DIM : trackBright(t);
     }
+    const k = drumPitch(i);
     const hs = firstHeld();
-    const cur = hs && hs[1].fields ? hs[1].fields[F.VEL] : stepDefaults.vel;
-    const k = drumVel(i), sel = clamp(Math.round((cur + 1) / 8) - 1, 0, 15);
-    if (k === sel) return OFFWHITE;
-    return k < sel ? trackDim(track) : trackFaint(track);
+    if (hs && hs[1].fields && stepNotesOf(hs[1]).includes(60 + k)) return WHITE;
+    return k === 0 ? trackBright(track) : trackDim(track);
 }
 
 function desiredLeds() {
@@ -1181,6 +1162,8 @@ function desiredLeds() {
     out.push(['c', CC_LEFT, LED_DIM], ['c', CC_RIGHT, LED_DIM]);
     out.push(['c', CC_UP, octave < 6 ? LED_DIM : OFF], ['c', CC_DOWN, octave > -2 ? LED_DIM : OFF]);
     out.push(['c', CC_SHIFT, shift ? LED_BRIGHT : LED_DIM]);
+    const bank = Math.floor(track / 4);
+    for (let r = 0; r < 4; r++) out.push(['c', CC_TRACK0 - r, bank * 4 + r === track ? WHITE : trackDim(bank * 4 + r)]);
     out.push(['c', CC_MUTE, muteHeld || mixer ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_LOOP, clipMode ? LED_BRIGHT : LED_DIM]);
     out.push(['c', CC_COPY, copyHeld ? LED_BRIGHT : LED_DIM]);
@@ -1580,7 +1563,7 @@ function startSave(path, name, sync = false) {
     tasks.push(() => {
         pullClips(); pullMix(); pullRec(); pullFx(); pullTransport();
         Object.assign(data, { tempo, sync: sync_(), lq: launchQ, recQuant, recMode, click: clickMode, fx: [...fxValues],
-            key: [scaleRoot, scaleType], selNotes: [...selNote], drumNotes: [...drumNote] });
+            key: [scaleRoot, scaleType] });
     });
     for (let t = 0; t < TRACKS; t++) {
         tasks.push(() => {
@@ -1633,8 +1616,6 @@ function startLoad(path, quiet = false) {
         if (Number.isFinite(data.recMode)) setParam('rmode', data.recMode);
         if (Number.isFinite(data.click)) setParam('click', data.click);
         if (Array.isArray(data.key)) { scaleRoot = clamp(data.key[0] | 0, 0, 11); scaleType = clamp(data.key[1] | 0, 0, SCALES.length - 1); }
-        if (Array.isArray(data.drumNotes)) data.drumNotes.forEach((n, t) => { if (t < TRACKS && n > 0 && n < 128) drumNote[t] = n | 0; });
-        if (Array.isArray(data.selNotes)) data.selNotes.forEach((n, t) => { if (t < TRACKS && n > 0 && n < 128) selNote[t] = n | 0; });
         (data.fx || []).forEach((v, i) => { if (Number.isFinite(v)) setParam('fx', `${i} ${v}`); });
     });
     data.tracks.forEach((tr, t) => {
@@ -1694,6 +1675,41 @@ function nextProjectName() {
 }
 
 /* ---------- sound library ---------- */
+function starterKits() {
+    try {
+        const d = JSON.parse(typeof host_read_file === 'function' ? (host_read_file(STARTER_SOUNDS) || 'null') : 'null');
+        return d && Array.isArray(d.kits) ? d.kits : [];
+    } catch (e) { return []; }
+}
+
+/* a kit: sounds on tracks 1-8, its effects, tempo and key, and a groove to start from */
+function applyKit(kit) {
+    const starters = starterSounds();
+    (kit.tracks || []).forEach((name, t) => {
+        const x = starters.find(y => y.name === name);
+        if (x && t < TRACKS) applySound(t, x);
+    });
+    for (const [id, v] of Object.entries(kit.fx || {})) {
+        const i = id | 0;
+        if (i >= 0 && i < FX.length) { fxValues[i] = clamp(v | 0, 0, FX[i][1]); setParam('fx', `${i} ${fxValues[i]}`); }
+    }
+    if (Number.isFinite(kit.tempo)) { sync = 0; setParam('sync', 0); tempo = kit.tempo; setParam('tempo', kit.tempo); }
+    if (Array.isArray(kit.key)) { scaleRoot = clamp(kit.key[0] | 0, 0, 11); scaleType = clamp(kit.key[1] | 0, 0, SCALES.length - 1); }
+    const steps = Array.isArray(kit.steps) ? kit.steps : [];
+    for (const t of new Set(steps.map(x => x[0]))) setParam('csclr', `${t}`);
+    for (const [t, st, notes, vel, len] of steps) {
+        setParam('sclr', `${t} ${st}`);
+        setParam('sf', `${t} ${st} ${F.FLAGS} ${FL_NOTE}`);
+        for (let k = 0; k < 4; k++) setParam('sf', `${t} ${st} ${F.NOTE0 + k} ${notes[k] || 0}`);
+        setParam('sf', `${t} ${st} ${F.VEL} ${vel}`);
+        setParam('sf', `${t} ${st} ${F.LEN} ${len}`);
+    }
+    for (let t = 0; t < TRACKS; t++) pullTrack(t);
+    pullFx();
+    stepsDirty = true;
+    showFlash(`KIT: ${kit.name}`);
+}
+
 function starterSounds() {
     try {
         const d = JSON.parse(typeof host_read_file === 'function' ? (host_read_file(STARTER_SOUNDS) || 'null') : 'null');
@@ -1734,7 +1750,7 @@ function loadSound(snd) {
 /* ---------- sound browser ----------
  * Turn the jog: the highlighted sound plays on the track straight away.
  * Left/Right: category. Jog click: keep it. Back or Menu: put the old sound back. */
-const SOUND_CATS = ['DRUMS', 'BASS', 'KEYS', 'LEAD', 'PAD', 'FX', 'USER'];
+const SOUND_CATS = ['DRUMS', 'BASS', 'KEYS', 'LEAD', 'PAD', 'FX', 'DUB', 'USER'];
 let browser = null;
 
 function openBrowser() {
@@ -1844,6 +1860,7 @@ function buildMenu() {
         { label: `SAVE ${projectName}`, act: () => startSave(`${PROJECT_DIR}/${projectName}.json`, projectName) },
         { label: 'SAVE AS NEW', act: () => { projectName = nextProjectName(); startSave(`${PROJECT_DIR}/${projectName}.json`, projectName); } },
         { label: 'NEW PROJECT', confirm: true, act: () => { setParam('reset', 1); projectName = nextProjectName(); afterReset(); applyDefaultKit(); showFlash('NEW PROJECT'); } },
+        ...starterKits().map(k => ({ label: `KIT: ${k.name}`, confirm: true, act: () => applyKit(k) })),
         ...listProjects().map(n => ({ label: `LOAD ${n}`, confirm: true, act: () => startLoad(`${PROJECT_DIR}/${n}.json`) })),
     ];
     menuIndex = clamp(menuIndex, 0, menuItems.length - 1);
@@ -1972,7 +1989,7 @@ globalThis.__opgrid = {
     PARAMS, MACH_PARAMS, MACHINES, PAGES, CONDS, LENS, SPEEDS, FX, DEST_NAMES, WAVES, SYNC_RATES, fxValues, solo,
     values, stepFlags, clipInfo, held, padToNote,
     clipStates, editClips, LAUNCH_QS,
-    state: () => ({ track, page, octave, scaleRoot, scaleType, selNote: [...selNote], drumNote: [...drumNote], shift, playing, stepPage, tempo, sync, mixer, mixBank,
+    state: () => ({ track, page, octave, scaleRoot, scaleType, lastNotes: lastNotes.map(x => [...x]), shift, playing, stepPage, tempo, sync, mixer, mixBank,
         clipMode, trackBank, sceneBank, launchQ, recArmed, countingIn, growTrack, recQuant, recMode,
         browser: browser ? { cat: browser.cats[browser.ci].name, item: browser.cats[browser.ci].items[browser.ii].name } : null,
         soundName: [...soundName], soundEdited: [...soundEdited], touchHeld,

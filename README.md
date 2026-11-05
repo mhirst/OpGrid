@@ -2,7 +2,7 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module: four synth machines, a step sequencer with per-step locks and conditions, clip launching, live recording, song mode, effects, and a starter sound library.
 
-**Status: 0.14.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
+**Status: 0.15.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
 
 | | | |
 |---|---|---|
@@ -28,11 +28,11 @@ Requires Schwung on the Move.
 
 ## First minutes
 
-A new project starts with a kit: kick, snare, hat, clap, bass, keys, lead and pad on tracks 1–8.
+A new project starts with the CLASSIC kit: kick, snare, hat, clap, bass, keys, lead and pad on tracks 1–8.
 
-1. Press **Play**, tap step buttons.
-2. **Shift + pad** (bottom row) picks a track. The screen's top line shows the track and its sound.
-3. **Click the jog wheel** to browse sounds: turn to hear each one, Left/Right for DRUMS / BASS / KEYS / LEAD / PAD / FX / USER, click to keep, **Back** to put the old one back.
+1. **Menu → KIT: DUB TECHNO** loads a dub techno kit with a groove (also DUB DRUMS, CLASSIC). Press **Play**.
+2. The **track buttons** (left of the pads) pick tracks 1–4; **Shift + track button** picks the group (1–4, 5–8, 9–12, 13–16). **Shift + pad** (bottom row) also works. The screen's top line shows the track and its sound.
+3. **Click the jog wheel** to browse sounds: turn to hear each one, Left/Right for DRUMS / BASS / KEYS / LEAD / PAD / FX / DUB / USER, click to keep, **Back** to put the old one back.
 4. **Touch any knob** to see what it does, in words, with its value in Hz, ms, % or dB.
 5. **Turn the jog** to change page; a list shows where you are.
 
@@ -40,11 +40,11 @@ A new project starts with a kit: kick, snare, hat, clap, bass, keys, lead and pa
 
 | Control | Action |
 |---|---|
-| Step buttons | Toggle steps on the selected track |
+| Step button (empty step) | Place the last note or chord you played on the pads, as on Move |
+| Step button (lit step) | Tap: clear it. Hold: edit it |
 | Hold step + knob | Lock that value on the step (sound pages), or edit the step (STEP page) |
-| Hold step + pad | Toggle that note in the step (a chord holds up to 4 notes); on a new step the first pad replaces its note |
-| Hold pads + step | Place the held chord on the step |
-| Hold step + Up / Down | Transpose the step a semitone (Shift: an octave). Drums show it as +/- semitones from the drum's pitch |
+| Hold step + pad | Add that note to the step, or take it out if it is there (up to 4 notes) |
+| Hold step + Up / Down | Transpose the step a semitone (Shift: an octave) |
 | Delete + step, or hold step + Delete | Clear the step and its locks |
 | Delete + pad | Remove that note from the whole clip |
 | Shift + Delete | Clear the whole clip (keeps its length and speed) |
@@ -58,12 +58,12 @@ A new project starts with a kit: kick, snare, hat, clap, bass, keys, lead and pa
 | Menu | Project menu (jog to choose, jog click to select) |
 | Shift + Loop | Song view / song mode on / off |
 | Capture | Capture a live performance as a song |
-| Pads | Play the selected track in key (rows 3 scale steps apart, like Move and Push). Bright = a note used in this clip, dim = the key's root, dark grey = other notes in key; holding a step lights its notes white |
-| Pad tap | Selects a note (light grey pad). Pressing a step adds it (to any notes already there); tapping a step that has it removes just that note. Steps that play it light bright, other note steps dim |
+| Pads | Play the selected track in key, rows a fourth apart, as on Move. The key's root is lit in the track colour, other notes in the key dim white; notes light white as they play |
+| Track buttons | Select track 1–4 of the current group; Shift + track button: group 1–4 / 5–8 / 9–12 / 13–16 |
 | Shift + Left / Right | Key root (C, C#, D …) |
 | Shift + Up / Down | Scale: major, minor, dorian, mixolydian, harmonic minor, pentatonic, minor pentatonic, blues, chromatic |
-| Drum pitch | FM Perc's first knob is **PTCH**: the drum's pitch in Hz. Drum steps play at that pitch; you never need the keyboard for drums |
-| FM Perc tracks | Pads become a drum grid: left 4×4 = tracks 1–16 (tap plays and selects; flashes when it hits), right 4×4 = 16 velocities (sets new steps, or the held step) |
+| FM Perc tracks | Pads become a drum grid: left 4×4 = the drum tracks (tap to play and select; flash as they hit), right 4×4 = 16 pitches of the selected drum (bottom-left = its own pitch). Hold a step + pitch pad to set that step's pitch |
+| Drum pitch | FM Perc's first knob is **PTCH**: the drum's pitch in Hz |
 | Shift + pad (bottom 16) | Select track 1–16 |
 | Mute + pad (bottom 16) | Mute / unmute a track |
 | Mute (tap) | Mixer mode on / off |

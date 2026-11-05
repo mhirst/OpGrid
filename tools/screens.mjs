@@ -105,11 +105,10 @@ settle();
 jogTo(0); h.knob(0, 1); h.tick(8);
 render(h, '1-fm-page', 'FM page, playing (algo shown while turned)');
 
-h.hold(49, true); h.cc(63); h.cc(63); h.cc(54); h.hold(49, false);  /* key: D minor */
-pad(10);                                                       /* select a note */
+h.hold(49, true); h.cc(63); h.cc(63); h.hold(49, false);           /* key: D minor */
 h.tick(12);
-render(h, '11-note-pads', 'Pads in key (D minor): root, used, selected');
-h.hold(49, true); h.cc(62); h.cc(62); h.cc(55); h.hold(49, false);
+render(h, '11-note-pads', 'Pads in key (D minor), like Move');
+h.hold(49, true); h.cc(62); h.cc(62); h.hold(49, false);
 
 jogTo(2);
 h.note(16 + 4);                                                /* hold step 5 */

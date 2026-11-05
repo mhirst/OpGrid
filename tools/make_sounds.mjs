@@ -43,6 +43,8 @@ const CAT = {
     LEAD: ['SQUELCH', 'BRASS', 'PD LEAD', 'HOLLOW', 'SUPERSAW', 'BIG STAB'],
     PAD: ['GLASS PAD', 'VOX PAD', 'STRINGS', 'SQUARE PAD', 'SOFT CHOIR'],
     FX: ['DRONE', 'RISER'],
+    DUB: ['DUB KICK', 'DUB KICK SOFT', 'DUB RIM', 'DUB HAT', 'DUB SHAKER', 'DUB CLAP', 'DUB CONGA',
+        'DUB CHORD', 'DUB STAB FM', 'DUB PAD', 'DUB SUB', 'DUB BELL', 'DUB FOG'],
 };
 const catOf = name => Object.keys(CAT).find(c => CAT[c].includes(name));
 
@@ -120,12 +122,70 @@ const SOUNDS = [
     sound('RISER', 'stack', { WAVE: 0, VOIC: 3, DTUN: 70, NOIS: 127 },
         { FTYP: FT.LP24, FREQ: 85, RESO: 80, AATK: 70, ASUS: 127, AREL: 70, VOL: 120,
           L1DEST: DEST(P.FREQ), L1WAVE: 3, L1RATE: RATE(6), L1DPTH: 100, L1TRIG: 1 }),   /* one-bar sweep up */
+    /* Dub techno: dark chords and drums soaked in delay and reverb */
+    sound('DUB KICK', 'perc', { PTCH: 29, SWP: 55, SWPT: 58, FM: 4, FMD: 40 }, { ADEC: 92, VOL: 122, DRIV: 20, SREV: 8 }),
+    sound('DUB KICK SOFT', 'perc', { PTCH: 31, SWP: 35, SWPT: 50, FM: 0 }, { ADEC: 88, FREQ: 90, VOL: 124 }),
+    sound('DUB RIM', 'perc', { PTCH: 64, SWP: 20, SWPT: 40, RAT: R[4], FM: 90, FMD: 40, CLIK: 100 },
+        { ADEC: 58, VOL: 80, PAN: 48, SDLY: 105, SREV: 50 }),
+    sound('DUB HAT', 'perc', { SWP: 0, FM: 0, NOIS: 127, NDEC: 56, COLR: 124 },
+        { FTYP: FT.HP, FREQ: 102, ADEC: 60, VOL: 100, PAN: 78, SDLY: 55, SREV: 40 }),
+    sound('DUB SHAKER', 'perc', { SWP: 0, FM: 0, NOIS: 127, NDEC: 60, COLR: 110 },
+        { FTYP: FT.HP, FREQ: 94, AATK: 6, ADEC: 64, VOL: 100, PAN: 84, SREV: 35 }),
+    sound('DUB CLAP', 'perc', { SWP: 0, FM: 0, NOIS: 127, NDEC: 72, COLR: 84, CLIK: 70 },
+        { FTYP: FT.HP, FREQ: 80, RESO: 20, ADEC: 76, VOL: 105, SREV: 110, SDLY: 40 }),
+    sound('DUB CONGA', 'perc', { PTCH: 55, SWP: 20, SWPT: 50, FM: 10, FMD: 50 }, { ADEC: 74, VOL: 100, PAN: 42, SDLY: 85, SREV: 40 }),
+    sound('DUB CHORD', 'stack', { WAVE: 0, VOIC: 3, DTUN: 15 },
+        { FTYP: FT.LP24, FREQ: 74, RESO: 35, FENV: 60, FDEC: 55, ADEC: 78, ASUS: 0, AREL: 62,
+          SDLY: 115, SREV: 75, SCHO: 50, VOL: 120, L1DEST: DEST(P.FREQ), L1RATE: RATE(0), L1DPTH: 30 }),
+    sound('DUB STAB FM', 'poly', { ALGO: 0, RAT2: R[1], LVL2: 55, DEC2: 45, FDBK: 20 },
+        { FTYP: FT.LP24, FREQ: 62, RESO: 30, ADEC: 66, ASUS: 0, AREL: 55, SDLY: 110, SREV: 70, SCHO: 40 }),
+    sound('DUB PAD', 'stack', { WAVE: 2, VOIC: 5, DTUN: 40 },
+        { FTYP: FT.LP12, FREQ: 60, AATK: 90, ASUS: 110, AREL: 100, SREV: 110, SCHO: 80, VOL: 84,
+          L1DEST: DEST(P.FREQ), L1RATE: RATE(0), L1DPTH: 40 }),
+    sound('DUB SUB', 'poly', { ALGO: 7, LVL2: 0, LVL3: 0, LVL4: 0 }, { FREQ: 110, ASUS: 100, AREL: 25, VOL: 118, DRIV: 15 }),
+    sound('DUB BELL', 'poly', { ALGO: 0, RAT2: R[3.5], LVL2: 45, DEC2: 60, LVL3: 0, LVL4: 0 },
+        { ADEC: 70, ASUS: 0, AREL: 70, SDLY: 120, SREV: 80, VOL: 84 }),
+    sound('DUB FOG', 'stack', { WAVE: 0, VOIC: 7, DTUN: 90, NOIS: 60 },
+        { FTYP: FT.BP, FREQ: 70, RESO: 50, AATK: 100, ASUS: 127, AREL: 110, SREV: 120, SDLY: 60, VOL: 76,
+          L1DEST: DEST(P.FREQ), L1RATE: RATE(1), L1DPTH: 60 }),
+];
+
+/* kits: sounds for tracks 1-8, effect settings, tempo, key and an optional starting groove.
+ * steps: [track, step, notes, vel, len index] */
+const CM7 = [48, 51, 55, 58];
+const DUB_FX = { 0: 7, 1: 100, 2: 110, 3: 34, 4: 115, 5: 105, 6: 20, 7: 95, 8: 60, 9: 20, 10: 110, 11: 92, 12: 30, 13: 20, 14: 10, 15: 100 };
+const KITS = [
+    { name: 'DUB TECHNO', tempo: 118, key: [0, 1], fx: DUB_FX,
+      tracks: ['DUB KICK', 'DUB RIM', 'DUB HAT', 'DUB SHAKER', 'DUB SUB', 'DUB CHORD', 'DUB PAD', 'DUB CLAP'],
+      steps: [
+          ...[0, 4, 8, 12].map(s => [0, s, [60], 112, 4]),
+          ...[7, 13].map(s => [1, s, [60], 82, 4]),
+          ...[2, 6, 10, 14].map(s => [2, s, [60], 92, 4]),
+          ...[1, 3, 5, 7, 9, 11, 13, 15].map(s => [3, s, [60], 60, 4]),
+          [4, 0, [36], 110, 6], [4, 10, [36], 100, 6],
+          [5, 3, CM7, 100, 2], [5, 10, CM7, 92, 2],
+          [6, 0, CM7.map(n => n + 12), 70, 12],
+          ...[4, 12].map(s => [7, s, [60], 64, 4]),
+      ] },
+    { name: 'DUB DRUMS', tempo: 120, key: [0, 1], fx: DUB_FX,
+      tracks: ['DUB KICK SOFT', 'DUB CLAP', 'DUB HAT', 'DUB SHAKER', 'DUB CONGA', 'DUB RIM'],
+      steps: [
+          ...[0, 4, 8, 12].map(s => [0, s, [60], 110, 4]),
+          ...[4, 12].map(s => [1, s, [60], 80, 4]),
+          ...[2, 6, 10, 14].map(s => [2, s, [60], 90, 4]),
+          ...[0, 2, 3, 5, 6, 8, 10, 11, 13, 14].map(s => [3, s, [60], 56, 4]),
+          [4, 3, [60], 90, 4], [4, 9, [65], 80, 4], [4, 14, [58], 85, 4],
+          [5, 7, [60], 80, 4], [5, 15, [60], 70, 4],
+      ] },
+    { name: 'CLASSIC', tempo: 120, key: [0, 1], fx: {},
+      tracks: ['KICK DEEP', 'SNARE', 'HAT CLOSED', 'CLAP', 'FM BASS', 'E-PIANO', 'SUPERSAW', 'VOX PAD'], steps: [] },
 ];
 
 const names = new Set();
 for (const s of SOUNDS) { if (names.has(s.name)) throw new Error(`duplicate ${s.name}`); names.add(s.name); }
 fs.writeFileSync(path.join(root, 'module/sounds.json'),
-    JSON.stringify({ app: 'opgrid-sounds', format: 1, sounds: SOUNDS }, null, 0) + '\n');
+    JSON.stringify({ app: 'opgrid-sounds', format: 1, sounds: SOUNDS, kits: KITS }, null, 0) + '\n');
 fs.mkdirSync(path.join(root, 'build'), { recursive: true });
 fs.writeFileSync(path.join(root, 'build/sounds.txt'), SOUNDS.map(s => `${s.name}|${s.params.join(',')}`).join('\n') + '\n');
-console.log(`${SOUNDS.length} starter sounds -> module/sounds.json`);
+for (const k of KITS) for (const n of k.tracks) if (!names.has(n)) throw new Error(`kit ${k.name}: no sound ${n}`);
+console.log(`${SOUNDS.length} starter sounds, ${KITS.length} kits -> module/sounds.json`);
