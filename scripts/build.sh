@@ -35,5 +35,7 @@ if command -v aarch64-linux-gnu-objdump >/dev/null; then
 fi
 
 tar --owner=0 --group=0 -czf build/opgrid-module.tar.gz -C build opgrid
+# the committed copy users download (link: github.com/mhirst/OpGrid/raw/main/dist/opgrid-module.tar.gz)
+mkdir -p dist && cp build/opgrid-module.tar.gz dist/opgrid-module.tar.gz
 echo "Built build/opgrid-module.tar.gz:"
 tar -tzf build/opgrid-module.tar.gz
