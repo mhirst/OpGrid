@@ -25,7 +25,7 @@ import * as os from 'os';
 /* ---------- hardware ids ---------- */
 const PAD0 = 68, PADS = 32, STEP0 = 16, STEPS = 16;
 const KNOB0 = 71, JOG = 14;
-const CC_SHIFT = 49, CC_DOWN = 54, CC_UP = 55, CC_LEFT = 62, CC_RIGHT = 63;
+const CC_SHIFT = 49, CC_DOWN = 54, CC_UP = 55, CC_LEFT = 62, CC_RIGHT = 63, CC_BACK = 51;
 const CC_PLAY = 85, CC_MUTE = 88, CC_DELETE = 119, CC_COPY = 60, CC_LOOP = 58;
 const CC_REC = 86, CC_UNDO = 56, CC_MENU = 50, JOG_CLICK = 3, CC_CAPTURE = 52;
 const WHITE = 120, GREY = 124, DARK = 119, OFF = 0, LED_BRIGHT = 127, LED_DIM = 16;
@@ -45,17 +45,25 @@ const ALGO_NAMES = ['4>3>2>1', '3+4>2>1', '2+3+4>1', '4>3>1+2', '2>1 4>3', '4>12
 
 const num = v => `${v}`;
 const signed = c => v => { const d = v - c; return d > 0 ? `+${d}` : `${d}`; };
-const ratio = v => RATIOS[v] || '?';
-const hold = v => v >= 127 ? 'HOLD' : `${v}`;
+const ratio = v => `x${RATIOS[v] || '?'}`;
 const pan = v => v === 64 ? 'C' : v < 64 ? `L${64 - v}` : `R${v - 64}`;
+/* plain units (all must match the engine's curves) */
+const pct = v => `${Math.round(v / 127 * 100)}%`;
+const secs = t => t < 1 ? `${Math.max(1, Math.round(t * 1000))}ms` : t < 10 ? `${t.toFixed(1)}s` : `${Math.round(t)}s`;
+const envTime = v => secs(0.0005 * Math.pow(20000, v / 127));                  /* og_engine env_seconds */
+const hold = v => v >= 127 ? 'HOLD' : envTime(v);
+const offTime = v => v ? envTime(v) : 'OFF';
+const glide = v => v ? envTime(Math.floor(v / 2)) : 'OFF';
+const hzk = f => f < 1000 ? `${Math.round(f)}Hz` : f < 10000 ? `${(f / 1000).toFixed(1)}k` : `${Math.round(f / 1000)}k`;
+const cutoff = v => hzk(20 * Math.pow(1000, v / 127));                         /* filter cutoff */
 
 /* LFO destinations: OFF, PITCH, every sound param 0..31, then the 3 sends */
 const DEST_NAMES = ['OFF', 'PTCH',
     'ALGO', 'RAT1', 'RAT2', 'RAT3', 'RAT4', 'LVL2', 'LVL3', 'LVL4',
     'FDBK', 'DEC2', 'DEC3', 'DEC4', 'DTUN', 'VELM', 'TUNE', 'GLID',
-    'FREQ', 'RESO', 'FTYP', 'FENV', 'FATK', 'FDEC', 'FSUS', 'FREL',
+    'CUT', 'RES', 'FTYP', 'FENV', 'FATK', 'FDEC', 'FSUS', 'FREL',
     'AATK', 'ADEC', 'ASUS', 'AREL', 'DRIV', 'PAN', 'VOL', 'VELA',
-    'SDLY', 'SREV', 'SCHO'];
+    'DLY', 'REV', 'CHOR'];
 const WAVES = ['SIN', 'TRI', 'SQR', 'SAW', 'RAMP', 'RND'];
 /* destinations 2..13 are the machine's own params: name them per machine */
 function destName(v, vals) {
@@ -72,43 +80,43 @@ const lfoRate = i => (v, vals) => vals && vals[32 + 8 * (i - 1) + 2]
     ? SYNC_RATES[Math.floor(v * SYNC_RATES.length / 128)] : hz(lfoHz(v));
 function lfoParams(i) {
     return [
-        ['DEST', `LFO ${i} destination`, DEST_NAMES.length - 1, 0, (v, vals) => destName(v, vals)],
-        ['WAVE', `LFO ${i} wave`, WAVES.length - 1, 0, v => WAVES[v]],
-        ['SYNC', `LFO ${i} sync`, 1, 1, v => v ? 'SYNC' : 'FREE'],
-        ['RATE', `LFO ${i} rate`, 127, 64, lfoRate(i)],
+        ['DEST', `LFO ${i} target`, DEST_NAMES.length - 1, 0, (v, vals) => destName(v, vals)],
+        ['WAVE', `LFO ${i} shape`, WAVES.length - 1, 0, v => WAVES[v]],
+        ['SYNC', `LFO ${i} tempo sync`, 1, 1, v => v ? 'SYNC' : 'FREE'],
+        ['RATE', `LFO ${i} speed`, 127, 64, lfoRate(i)],
         ['DPTH', `LFO ${i} depth`, 127, 64, v => { const d = v - 64; return d > 0 ? `+${d}` : `${d}`; }],
-        ['TRIG', `LFO ${i} trigger`, 1, 0, v => v ? 'TRIG' : 'FREE'],
-        ['PHAS', `LFO ${i} phase`, 127, 0, v => `${Math.round(v * 360 / 128)}`],
-        ['FADE', `LFO ${i} fade`, 127, 0, v => v ? `${v}` : 'OFF'],
+        ['TRIG', `LFO ${i} restart`, 1, 0, v => v ? 'NOTE' : 'FREE'],
+        ['PHAS', `LFO ${i} start phase`, 127, 0, v => `${Math.round(v * 360 / 128)}`],
+        ['FADE', `LFO ${i} fade in`, 127, 0, offTime],
     ];
 }
 
-/* [short name, long name, max, default, formatter] per param id */
+/* [short name (<=5), long name (<=20, shown on knob touch), max, default, formatter] per param id */
 const PARAMS = [
-    ['ALGO', 'Algorithm', 7, 0, v => `${v + 1}`],
-    ['RAT1', 'Op 1 ratio', 21, 3, ratio], ['RAT2', 'Op 2 ratio', 21, 3, ratio],
+    ['ALGO', 'FM algorithm', 7, 0, v => `${v + 1}`],
+    ['RAT1', 'Op 1 (carrier) ratio', 21, 3, ratio], ['RAT2', 'Op 2 ratio', 21, 3, ratio],
     ['RAT3', 'Op 3 ratio', 21, 5, ratio], ['RAT4', 'Op 4 ratio', 21, 3, ratio],
-    ['LVL2', 'Op 2 level', 127, 60, num], ['LVL3', 'Op 3 level', 127, 30, num],
-    ['LVL4', 'Op 4 level', 127, 0, num],
+    ['LVL2', 'Op 2 level', 127, 60, pct], ['LVL3', 'Op 3 level', 127, 30, pct],
+    ['LVL4', 'Op 4 level', 127, 0, pct],
 
-    ['FDBK', 'Feedback', 127, 0, num], ['DEC2', 'Op 2 decay', 127, 70, hold],
+    ['FDBK', 'Op 4 feedback', 127, 0, pct], ['DEC2', 'Op 2 decay', 127, 70, hold],
     ['DEC3', 'Op 3 decay', 127, 60, hold], ['DEC4', 'Op 4 decay', 127, 60, hold],
-    ['DTUN', 'Detune', 127, 0, num], ['VELM', 'Vel > mod', 127, 64, num],
-    ['TUNE', 'Tune', 48, 24, signed(24)], ['GLID', 'Glide', 127, 0, num],
+    ['DTUN', 'Detune', 127, 0, pct], ['VELM', 'Velocity to FM', 127, 64, pct],
+    ['TUNE', 'Tune (semitones)', 48, 24, signed(24)], ['GLID', 'Glide time', 127, 0, glide],
 
-    ['FREQ', 'Cutoff', 127, 110, num], ['RESO', 'Resonance', 127, 20, num],
-    ['TYPE', 'Filter type', 4, 0, v => FTYPES[v]], ['ENV', 'Env depth', 127, 64, signed(64)],
-    ['ATK', 'Filter attack', 127, 0, num], ['DEC', 'Filter decay', 127, 60, num],
-    ['SUS', 'Filter sustain', 127, 127, num], ['REL', 'Filter release', 127, 50, num],
+    ['CUT', 'Filter cutoff', 127, 110, cutoff], ['RES', 'Filter resonance', 127, 20, pct],
+    ['TYPE', 'Filter type', 4, 0, v => FTYPES[v]], ['ENV', 'Filter env amount', 127, 64, signed(64)],
+    ['ATK', 'Filter env attack', 127, 0, envTime], ['DEC', 'Filter env decay', 127, 60, envTime],
+    ['SUS', 'Filter env sustain', 127, 127, pct], ['REL', 'Filter env release', 127, 50, envTime],
 
-    ['ATK', 'Amp attack', 127, 0, num], ['DEC', 'Amp decay', 127, 70, num],
-    ['SUS', 'Amp sustain', 127, 90, num], ['REL', 'Amp release', 127, 50, num],
-    ['DRIV', 'Drive', 127, 0, num], ['PAN', 'Pan', 127, 64, pan],
-    ['VOL', 'Volume', 127, 100, num], ['VEL', 'Vel > amp', 127, 64, num],
+    ['ATK', 'Amp attack', 127, 0, envTime], ['DEC', 'Amp decay', 127, 70, envTime],
+    ['SUS', 'Amp sustain', 127, 90, pct], ['REL', 'Amp release', 127, 50, envTime],
+    ['DRIV', 'Drive', 127, 0, pct], ['PAN', 'Pan', 127, 64, pan],
+    ['VOL', 'Track volume', 127, 100, pct], ['VEL', 'Velocity to volume', 127, 64, pct],
     ...lfoParams(1), ...lfoParams(2), ...lfoParams(3),
-    ['DLY', 'Delay send', 127, 0, num], ['REV', 'Reverb send', 127, 0, num],
-    ['CHO', 'Chorus send', 127, 0, num], ['MCH', 'MIDI channel', 16, 0, v => v ? `CH${v}` : 'OFF'],
-    ['MODE', 'MIDI mode', 2, 0, v => ['INT', 'EXT', 'BOTH'][v]],
+    ['SEND', 'Delay send', 127, 0, pct], ['SEND', 'Reverb send', 127, 0, pct],
+    ['SEND', 'Chorus send', 127, 0, pct], ['CHAN', 'MIDI out channel', 16, 0, v => v ? `CH${v}` : 'OFF'],
+    ['PLAY', 'Sound / MIDI out', 2, 0, v => ['INT', 'MIDI', 'BOTH'][v]],
     ['', 'Machine', 3, 0, v => ['POLY', 'PERC', 'MORPH', 'STACK'][v]], ['', '', 0, 0, () => ''], ['', '', 0, 0, () => ''],
 ];
 const NPARAMS = PARAMS.length;
@@ -121,21 +129,21 @@ const MWAVES = ['SIN', 'TRI', 'SAW', 'SQR', 'PLS', 'ORGN', 'VOX', 'GLAS'];
 const none = ['', '', 0, 0, () => ''];
 const MACH_PARAMS = [
     null,                                                   /* FM Poly: PARAMS 0..11 */
-    [   ['SWP', 'Pitch sweep', 127, 40, num], ['SWPT', 'Sweep time', 127, 55, num],
-        ['RAT', 'Mod ratio', 21, 3, ratio], ['FM', 'FM amount', 127, 30, num],
-        ['FMD', 'FM decay', 127, 50, num], ['NOIS', 'Noise level', 127, 0, num],
-        ['NDEC', 'Noise decay', 127, 55, num], ['COLR', 'Noise colour', 127, 64, signed(64)],
-        ['FDBK', 'Feedback', 127, 0, num], ['CLIK', 'Click', 127, 0, num], none, none ],
-    [   ['WAVA', 'Wave A', 127, 0, v => MWAVES[Math.round(v / 127 * 7)]],
-        ['WAVB', 'Wave B', 127, 36, v => MWAVES[Math.round(v / 127 * 7)]],
-        ['MIX', 'A/B mix', 127, 0, num], ['PD', 'Phase distortion', 127, 0, num],
-        ['TUNB', 'Wave B tune', 127, 64, v => { const d = Math.round((v - 64) / 63 * 24); return d > 0 ? `+${d}` : `${d}`; }],
-        ['RING', 'Ring mod', 127, 0, num], ['NOIS', 'Noise', 127, 0, num], ['DRFT', 'Drift', 127, 0, num],
-        ['SUBL', 'Sub level', 127, 0, num], ['SUBO', 'Sub octave', 1, 0, v => v ? '-2' : '-1'], none, none ],
-    [   ['WAVE', 'Wave', 3, 0, v => ['SAW', 'SQR', 'TRI', 'SIN'][v]], ['VOIC', 'Voices', 7, 5, v => `${v + 1}`],
-        ['DTUN', 'Detune', 127, 40, num], ['ANIM', 'Animation', 127, 30, num],
-        ['SUBL', 'Sub level', 127, 0, num], ['SUBO', 'Sub octave', 1, 0, v => v ? '-2' : '-1'],
-        ['NOIS', 'Noise', 127, 0, num], ['MIX', 'Side level', 127, 100, num], none, none, none, none ],
+    [   ['SWP', 'Pitch sweep depth', 127, 40, v => `+${Math.round(v / 127 * 48)}st`], ['SWPT', 'Pitch sweep time', 127, 55, envTime],
+        ['RAT', 'FM ratio', 21, 3, ratio], ['FM', 'FM amount', 127, 30, pct],
+        ['FMD', 'FM decay', 127, 50, envTime], ['NOIS', 'Noise level', 127, 0, pct],
+        ['NDEC', 'Noise decay', 127, 55, envTime], ['COLR', 'Noise tone', 127, 64, signed(64)],
+        ['FDBK', 'Body feedback', 127, 0, pct], ['CLIK', 'Click level', 127, 0, pct], none, none ],
+    [   ['WAVA', 'Osc A wave', 127, 0, v => MWAVES[Math.round(v / 127 * 7)]],
+        ['WAVB', 'Osc B wave', 127, 36, v => MWAVES[Math.round(v / 127 * 7)]],
+        ['MIX', 'Mix of A and B', 127, 0, pct], ['PD', 'Phase distortion', 127, 0, pct],
+        ['TUNB', 'Osc B tune (semis)', 127, 64, v => { const d = Math.round((v - 64) / 63 * 24); return d > 0 ? `+${d}` : `${d}`; }],
+        ['RING', 'Ring modulation', 127, 0, pct], ['NOIS', 'Noise level', 127, 0, pct], ['DRFT', 'Analog drift', 127, 0, pct],
+        ['SUBL', 'Sub osc level', 127, 0, pct], ['SUBO', 'Sub osc octave', 1, 0, v => v ? '-2' : '-1'], none, none ],
+    [   ['WAVE', 'Wave shape', 3, 0, v => ['SAW', 'SQR', 'TRI', 'SIN'][v]], ['VOIC', 'Stacked copies', 7, 5, v => `${v + 1}`],
+        ['DTUN', 'Detune spread', 127, 40, pct], ['ANIM', 'Movement', 127, 30, pct],
+        ['SUBL', 'Sub osc level', 127, 0, pct], ['SUBO', 'Sub osc octave', 1, 0, v => v ? '-2' : '-1'],
+        ['NOIS', 'Noise level', 127, 0, pct], ['SIDE', 'Outer copies level', 127, 100, pct], none, none, none, none ],
 ];
 const machineOf = t => clamp(values[t][P_MACH] | 0, 0, MACHINES.length - 1);
 /* the table entry for a param on a track (machine-aware) */
@@ -143,25 +151,49 @@ function pdef(t, pid) {
     const m = machineOf(t);
     return m && pid < 12 ? MACH_PARAMS[m][pid] : PARAMS[pid];
 }
-const pageName = p => p < 2 ? MACH_PAGES[machineOf(track)][p] : PAGES[p];
-const SOUND_PAGES = NPARAMS / 8;            /* FM, FM 2, FILTER, AMP, LFO 1-3, SEND */
-const PAGES = ['FM', 'FM 2', 'FILTER', 'AMP', 'LFO 1', 'LFO 2', 'LFO 3', 'SEND', 'STEP', 'CLIP', 'FX 1', 'FX 2'];
-const PAGE_STEP = 8, PAGE_CLIP = 9, PAGE_FX1 = 10, PAGE_FX2 = 11;
-/* header titles for the global FX pages (they are not per track) */
-const FX_TITLES = ['DELAY+REVERB', 'CHORUS+MASTR'];
+/* ---------- pages ----------
+ * Each param page is 8 knob slots: {p: pid} = this track's param, {fx: id} = a
+ * shared effect setting, null = unused. Effects get a page each, with the
+ * track's send to that effect on the same page. */
+const PAGES = ['SOUND', 'SOUND 2', 'FILTER', 'AMP', 'LFO 1', 'LFO 2', 'LFO 3',
+    'DELAY', 'REVERB', 'CHORUS', 'MASTER', 'MIDI', 'STEP', 'CLIP'];
+const PAGE_LFO1 = 4, PAGE_DELAY = 7, PAGE_REVERB = 8, PAGE_CHORUS = 9, PAGE_MASTER = 10, PAGE_MIDI = 11;
+const PAGE_STEP = 12, PAGE_CLIP = 13;
 const P_VOL = 30;
+const range = (a, n) => Array.from({ length: n }, (_, i) => ({ p: a + i }));
+const fxs = (...ids) => ids.map(i => (i === null ? null : { fx: i }));
+const PAGE_KNOBS = [
+    range(0, 8), range(8, 8), range(16, 8), range(24, 8), range(32, 8), range(40, 8), range(48, 8),
+    [...fxs(0, 1, 2, 3, null, null, null), { p: 56 }],     /* DELAY  + this track's delay send */
+    [...fxs(4, 5, 6, 7, null, null, null), { p: 57 }],     /* REVERB + send */
+    [...fxs(8, 9, 10, null, null, null, null), { p: 58 }], /* CHORUS + send */
+    fxs(11, 12, 13, 14, 15, null, null, null),             /* MASTER */
+    [{ p: 59 }, { p: 60 }, null, null, null, null, null, null],
+];
+const isKnobPage = p => p < PAGE_KNOBS.length;
+const isFxPage = p => p >= PAGE_DELAY && p <= PAGE_MASTER;
+const MACH_TITLES = [['FM OPERATORS', 'FM DECAY+TUNE'], ['DRUM BODY', 'DRUM MORE'],
+    ['OSCILLATORS', 'SUB + TUNE'], ['STACK', 'TUNE + MORE']];
+const PAGE_TITLES = ['', '', 'FILTER', 'AMP', 'LFO 1', 'LFO 2', 'LFO 3',
+    'DELAY', 'REVERB', 'CHORUS', 'MASTER', 'MIDI OUT', 'STEP', 'CLIP'];
+const pageTitle = p => p < 2 ? MACH_TITLES[machineOf(track)][p] : PAGE_TITLES[p];
+const pageName = pageTitle;
 
-/* global effects (must match og_fx.c): [name, max, default, formatter] */
+/* shared effects (must match og_fx.c): [name, max, default, formatter, long name] */
 const DTIMES = ['1/32', '1/16T', '1/16', '1/8T', '1/16D', '1/8', '1/4T', '1/8D', '1/4', '1/2T', '1/4D', '1/2', '1BAR'];
 const FX = [
-    ['TIME', 12, 7, v => DTIMES[v]], ['FDBK', 127, 50, num], ['PING', 127, 64, num],
-    ['TONE', 127, 64, v => { const d = v - 64; return d === 0 ? 'FLAT' : d < 0 ? `LP${-d}` : `HP${d}`; }],
-    ['SIZE', 127, 80, num], ['DCAY', 127, 70, num], ['PRE', 127, 10, v => `${Math.round(v / 127 * 200)}ms`],
-    ['DAMP', 127, 60, num],
-    ['DPTH', 127, 60, num], ['RATE', 127, 30, num], ['WIDE', 127, 100, num],
-    ['THR', 127, 127, v => v >= 127 ? 'OFF' : `${Math.round(-40 + v / 127 * 40)}dB`],
-    ['RAT', 127, 32, v => `${Math.round(1 + v / 127 * 19)}:1`],
-    ['GAIN', 127, 0, v => `+${Math.round(v / 127 * 18)}dB`], ['DRIV', 127, 0, num], ['VOL', 127, 100, num],
+    ['TIME', 12, 7, v => DTIMES[v], 'Delay time'], ['FDBK', 127, 50, pct, 'Delay repeats'],
+    ['PING', 127, 64, pct, 'Ping-pong (L/R)'],
+    ['TONE', 127, 64, v => { const d = v - 64; return d === 0 ? 'FLAT' : d < 0 ? `DRK${-d}` : `BRT${d}`; }, 'Repeats tone'],
+    ['SIZE', 127, 80, pct, 'Reverb size'], ['TIME', 127, 70, v => secs(0.3 * Math.pow(40, v / 127)), 'Reverb decay time'],
+    ['PRE', 127, 10, v => `${Math.round(v / 127 * 200)}ms`, 'Reverb pre-delay'],
+    ['DAMP', 127, 60, pct, 'Reverb darkness'],
+    ['DPTH', 127, 60, pct, 'Chorus depth'], ['RATE', 127, 30, v => { const f = 0.05 * Math.pow(100, v / 127); return f < 1 ? f.toFixed(2) : f.toFixed(1); }, 'Chorus speed (Hz)'],
+    ['WIDE', 127, 100, pct, 'Chorus stereo width'],
+    ['THR', 127, 127, v => v >= 127 ? 'OFF' : `${Math.round(-40 + v / 127 * 40)}dB`, 'Compressor threshold'],
+    ['RAT', 127, 32, v => `${Math.round(1 + v / 127 * 19)}:1`, 'Compressor ratio'],
+    ['GAIN', 127, 0, v => `+${Math.round(v / 127 * 18)}dB`, 'Compressor makeup'],
+    ['DRIV', 127, 0, pct, 'Master drive'], ['VOL', 127, 100, pct, 'Master volume'],
 ];
 const fxValues = FX.map(f => f[2]);
 
@@ -222,7 +254,10 @@ const recLocked = new Set();                     /* params moved while recording
 function showFlash(text, ticks = 700) { flash = text; flashUntil = tickCount + ticks; dirty = true; }
 const solo = new Array(16).fill(0);
 let playing = false, tempo = 120, sync = 1;
-let touchedKnob = -1, touchedUntil = 0, tickCount = 0;
+let touchedKnob = -1, touchedUntil = 0, tickCount = 0, touchHeld = -1;
+let pageListUntil = 0;                          /* page overview shown after a jog turn */
+const soundName = new Array(16).fill('INIT');   /* name of the sound loaded on each track */
+const soundEdited = new Array(16).fill(false);
 let dirty = true, stepsDirty = true;
 const values = Array.from({ length: TRACKS }, () => PARAMS.map(p => p[3]));
 const padNote = new Array(PADS).fill(-1);       /* note sounding from each pad */
@@ -286,8 +321,7 @@ function pullMix() {
     for (let t = 0; t < TRACKS; t++) { clipInfo[t].mute = m.charCodeAt(t) - 48; solo[t] = m.charCodeAt(16 + t) - 48; }
 }
 
-function editFx(knob, delta) {
-    const id = (page === PAGE_FX2 ? 8 : 0) + knob;
+function editFx(knob, id, delta) {
     const [, max] = FX[id];
     touch(knob);
     const next = clamp(fxValues[id] + delta, 0, max);
@@ -358,12 +392,44 @@ function firstHeld() {
     return null;
 }
 
-function editSound(knob, delta) {
-    const pid = page * 8 + knob;
+/* the knob slot under knob k on the current page */
+function knobRef(k) { return isKnobPage(page) ? PAGE_KNOBS[page][k] : null; }
+
+/* everything the screen needs to show one knob slot */
+function refInfo(ref, hs) {
+    if (!ref) return null;
+    if (ref.fx !== undefined) {
+        const [name, max, , fmt, long] = FX[ref.fx];
+        const v = fxValues[ref.fx];
+        return { name, long, max, v, text: fmt(v), locked: false };   /* header says ALL TRACKS */
+    }
+    const pid = ref.p;
+    const [name, long, max, , fmt] = pdef(track, pid);
+    if (!name) return null;
+    const locked = !!(hs && hs[1].locks.has(pid));
+    const v = clamp(locked ? hs[1].locks.get(pid) : values[track][pid] | 0, 0, max);
+    const isSend = pid >= 56 && pid <= 58;
+    return { name, long: isSend ? `T${track + 1} ${long.toLowerCase()}` : long, max, v,
+        text: fmt(v, values[track]), locked };
+}
+
+function editKnob(knob, delta) {
+    const ref = knobRef(knob);
+    if (!ref) return;
+    if (ref.fx !== undefined) {
+        if (held.size) { touch(knob); showFlash('FX CANT BE LOCKED'); return; }
+        editFx(knob, ref.fx, delta);
+        return;
+    }
+    editSound(knob, ref.p, delta);
+}
+
+function editSound(knob, pid, delta) {
     if (pid >= NPARAMS) return;
     const max = pdef(track, pid)[2];
     if (max === 0) return;
     touch(knob);
+    if (pid !== 59 && pid !== 60) soundEdited[track] = true;
     if (held.size) {
         /* lock the parameter on every held step */
         for (const [s, h] of held) {
@@ -626,7 +692,12 @@ globalThis.onMidiMessageInternal = function (data) {
 
     if (status === 0x90 || status === 0x80) {
         const on = status === 0x90 && d2 > 0;
-        if (d1 < 10) return;                                   /* knob touch */
+        if (d1 < 8) {                                          /* knob touched: show what it is */
+            if (on) { touchHeld = d1; touch(d1); }
+            else if (touchHeld === d1) { touchHeld = -1; touchedUntil = tickCount + 250; dirty = true; }
+            return;
+        }
+        if (d1 < 10) return;                                   /* volume / jog touch */
         if (d1 >= PAD0 && d1 < PAD0 + PADS) { onPad(d1 - PAD0, d2, on); return; }
         if (d1 >= STEP0 && d1 < STEP0 + STEPS) onStep(d1 - STEP0, on);
         return;
@@ -635,23 +706,21 @@ globalThis.onMidiMessageInternal = function (data) {
 
     if (d1 >= KNOB0 && d1 < KNOB0 + 8) {
         const knob = d1 - KNOB0;
-        if (menuOpen) return;
+        if (menuOpen || browser) return;
         let small;
         if (songView) small = knob !== 3;
         else if (mixer) small = false;
-        else if (page < SOUND_PAGES) { const pid = page * 8 + knob; small = pid < NPARAMS && pdef(track, pid)[2] < 40; }
+        else if (isKnobPage(page)) { const info = refInfo(knobRef(knob), null); small = !info || info.max < 40; }
         else if (page === PAGE_STEP) small = knob !== 1 && knob !== 2;
-        else if (page === PAGE_CLIP) small = knob === 1 || knob >= 4;
-        else small = FX[(page === PAGE_FX2 ? 8 : 0) + knob][1] < 40;
+        else small = knob === 1 || knob >= 4;           /* CLIP page */
         const raw = small ? decodeDelta(d2) : decodeAcceleratedDelta(d2, knob);
         const delta = shift && !small ? Math.sign(raw) : raw;
         if (!delta) return;
         if (songView) editSongRow(knob, delta);
         else if (mixer) editMixer(knob, delta);
-        else if (page < SOUND_PAGES) editSound(knob, delta);
+        else if (isKnobPage(page)) editKnob(knob, delta);
         else if (page === PAGE_STEP) editStep(knob, delta);
-        else if (page === PAGE_CLIP) editClip(knob, delta);
-        else editFx(knob, delta);
+        else editClip(knob, delta);
         return;
     }
     const press = d2 > 0;
@@ -673,10 +742,14 @@ globalThis.onMidiMessageInternal = function (data) {
         copyHeld = press; if (!press) copySrc = null;
         if (press && songView) songDuplicateRow();
         dirty = true; break;
-    case CC_MENU: if (press) toggleMenu(); break;
+    case CC_MENU: if (press) { if (browser) browserCancel(); else toggleMenu(); } break;
+    case CC_BACK: if (press) goBack(); break;
     case JOG_CLICK:
-        if (press && menuOpen) menuSelect();
-        else if (press && songView) songClick();
+        if (!press) break;
+        if (browser) browserKeep();
+        else if (menuOpen) menuSelect();
+        else if (songView && !clipMode) songClick();
+        else if (!mixer && !clipMode && isKnobPage(page)) openBrowser();   /* click on a sound page: browse */
         break;
     case CC_CAPTURE: if (press) toggleCapture(); break;
     case CC_UNDO:
@@ -720,18 +793,21 @@ globalThis.onMidiMessageInternal = function (data) {
     case JOG: {
         const dl = decodeDelta(d2);
         if (!dl) break;
-        if (menuOpen) menuMove(dl);
+        if (browser) browserMove(dl);
+        else if (menuOpen) menuMove(dl);
         else if (songView) { songSel = clamp(songSel + dl, 0, songRows.length); dirty = true; }
         else if (shift && !mixer && !clipMode) changeMachine(dl);
         else changePage(dl);
         break;
     }
     case CC_LEFT: if (press) {
-        if (clipMode) { trackBank = 0; dirty = true; }
+        if (browser) browserCat(-1);
+        else if (clipMode) { trackBank = 0; dirty = true; }
         else if (mixer) { mixBank = 0; dirty = true; } else changePage(-1);
     } break;
     case CC_RIGHT: if (press) {
-        if (clipMode) { trackBank = 1; dirty = true; }
+        if (browser) browserCat(1);
+        else if (clipMode) { trackBank = 1; dirty = true; }
         else if (mixer) { mixBank = 1; dirty = true; } else changePage(1);
     } break;
     case CC_UP: if (press) {
@@ -764,10 +840,11 @@ function changeMachine(d) {
 }
 
 function changePage(d) {
-    page = (page + d + PAGES.length) % PAGES.length;
+    page = clamp(page + d, 0, PAGES.length - 1);     /* stop at the ends: easier to find your way */
     touchedKnob = -1;
+    pageListUntil = tickCount + 350;
     if (page === PAGE_CLIP) { pullClip(track); pullTransport(); pullClips(); }
-    if (page === PAGE_FX1 || page === PAGE_FX2) pullFx();
+    if (isFxPage(page)) pullFx();
     dirty = true;
 }
 
@@ -871,27 +948,65 @@ function drawCell(k, name, text, frac, hot, marked) {
     }
 }
 
+/* fit text into a pixel width, cutting the tail */
+function fit(t, w) {
+    t = `${t}`;
+    while (t.length && text_width(t) > w) t = t.slice(0, -1);
+    return t;
+}
+
+/* Header: what you are editing, in words. Left: track + sound (or the
+ * effect, which is shared). Right: transport + page. */
 function drawHeader() {
     fill_rect(0, 0, 128, 10, 1);
     const hs = firstHeld();
-    let left = `T${String(track + 1).padStart(2, '0')}`;
-    left += ` C${editClips[track] + 1}`;
-    left += hs ? ` STP${hs[0] + 1}` : (clipInfo[track].mute ? ' MUTE' : '');
-    if (!mixer && (page === PAGE_FX1 || page === PAGE_FX2)) left = FX_TITLES[page - PAGE_FX1];
-    if (mixer) left = `TRACKS ${mixBank * 8 + 1}-${mixBank * 8 + 8}`;
-    print(2, 1, left, 0);
-    const tag = countingIn ? 'CNT' : recArmed ? 'REC' : playing ? '>' : '.';
-    const right = `${tag} ${mixer ? 'MIX' : (page === PAGE_FX1 || page === PAGE_FX2) ? '' : pageName(page)}`;
-    print(126 - text_width(right), 1, right, 0);
+    const tag = countingIn ? 'CNT ' : recArmed ? 'REC ' : playing ? '> ' : '';
+    let left, right;
+    if (mixer) { left = `MIXER ${mixBank * 8 + 1}-${mixBank * 8 + 8}`; right = tag.trim(); }
+    else if (isFxPage(page)) { left = PAGE_TITLES[page]; right = `${tag}ALL TRACKS`; }
+    else {
+        left = `T${track + 1} ${soundName[track]}${soundEdited[track] ? '*' : ''}`;
+        right = `${tag}${hs ? `STEP ${hs[0] + 1}` : clipInfo[track].mute ? 'MUTED' : `C${editClips[track] + 1}`}`;
+    }
+    const rw = text_width(right);
+    print(2, 1, fit(left, 124 - rw - 4), 0);
+    print(126 - rw, 1, right, 0);
+}
+
+/* big readout for the touched / turned knob: full name and value */
+function drawKnobInfo(k, hs) {
+    const info = isKnobPage(page) ? refInfo(knobRef(k), hs) : null;
+    if (!info) return;
+    const y = k < 4 ? 38 : 11;                       /* cover the other row, not this knob */
+    fill_rect(0, y, 128, 26, 0);
+    draw_rect(0, y, 128, 26, 1);
+    print(4, y + 4, fit(info.long + (info.locked ? ' (step)' : ''), 120), 1);
+    print(4, y + 15, info.text, 1);
+    const bx = 8 + Math.max(30, text_width(info.text)), bw = 120 - bx;
+    draw_rect(bx, y + 16, bw, 5, 1);
+    fill_rect(bx, y + 16, Math.round(bw * clamp(info.v / (info.max || 1), 0, 1)), 5, 1);
+}
+
+/* page overview after a jog turn: where you are among all pages */
+function drawPageList() {
+    fill_rect(0, 11, 128, 53, 0);
+    const first = clamp(page - 2, 0, PAGES.length - 5);
+    for (let r = 0; r < 5; r++) {
+        const p = first + r, y = 13 + r * 10;
+        const label = `${String(p + 1).padStart(2, ' ')} ${pageTitle(p)}${isFxPage(p) ? ' (fx)' : ''}`;
+        if (p === page) { fill_rect(0, y - 1, 128, 10, 1); print(4, y, label, 0); }
+        else print(4, y, label, 1);
+    }
 }
 
 function drawScreen() {
     clear_screen();
     if (menuOpen || job) { drawMenu(); return; }
+    if (browser) { drawBrowser(); return; }
     if (songView && !clipMode) { drawSong(); return; }
     drawHeader();
     const hs = firstHeld();
-    const hot = k => k === touchedKnob && tickCount < touchedUntil;
+    const hot = k => k === touchHeld || (k === touchedKnob && tickCount < touchedUntil);
     if (flash && tickCount < flashUntil) {
         drawBody(hs, hot);
         fill_rect(0, 54, 128, 10, 1);
@@ -904,15 +1019,15 @@ function drawScreen() {
 function drawBody(hs, hot) {
     if (mixer) { drawMixer(hot); return; }
     if (clipMode && !(touchedKnob >= 0 && tickCount < touchedUntil)) { drawClips(); return; }
-    if (page < SOUND_PAGES) {
+    if (tickCount < pageListUntil) { drawPageList(); return; }
+    if (isKnobPage(page)) {
         for (let k = 0; k < 8; k++) {
-            const pid = page * 8 + k;
-            const [name, , max, , fmt] = pdef(track, pid);
-            if (!name) continue;
-            const locked = hs && hs[1].locks.has(pid);
-            const v = clamp(locked ? hs[1].locks.get(pid) : values[track][pid] | 0, 0, max);
-            drawCell(k, name, fmt(v, values[track]), v / max, hot(k), locked);
+            const info = refInfo(knobRef(k), hs);
+            if (!info) continue;
+            drawCell(k, info.name, info.text, info.v / (info.max || 1), hot(k), info.locked);
         }
+        const hk = touchHeld >= 0 ? touchHeld : (touchedKnob >= 0 && tickCount < touchedUntil ? touchedKnob : -1);
+        if (hk >= 0 && !(hk === 0 && page === 0 && machineOf(track) === 0)) drawKnobInfo(hk, hs);
         if (hot(0) && page === 0 && machineOf(track) === 0) {
             /* routing takes over the lower half while the algorithm knob moves */
             fill_rect(0, 37, 128, 27, 0);
@@ -935,13 +1050,6 @@ function drawBody(hs, hot) {
                 const text = k === 1 && chord ? `${fmt(v)}+${chord}` : fmt(v);
                 drawCell(k, name, text, max - min > 1 ? (v - min) / (max - min) : null, hot(k), false);
             });
-        }
-    } else if (page === PAGE_FX1 || page === PAGE_FX2) {
-        const base = page === PAGE_FX2 ? 8 : 0;
-        for (let k = 0; k < 8; k++) {
-            const [name, max, , fmt] = FX[base + k];
-            const v = fxValues[base + k];
-            drawCell(k, name, fmt(v), v / max, hot(k), false);
         }
     } else {
         CLIP_KNOBS.forEach(([name, max, min, fmt], k) => {
@@ -1212,7 +1320,8 @@ function startSave(path, name, sync = false) {
                 const st = clipState(t, c);
                 if (st === CS_PLAYING || st === CS_STOPPING) play = c;
             }
-            data.tracks[t] = { params, mute: clipInfo[t].mute, solo: solo[t], edit: editClips[t], play, clips: {} };
+            data.tracks[t] = { params, mute: clipInfo[t].mute, solo: solo[t], edit: editClips[t], play, clips: {},
+                sound: soundName[t], edited: soundEdited[t] };
         });
         for (let c = 0; c < CLIPS; c++) tasks.push(() => {
             if (clipState(t, c) === CS_EMPTY) return;
@@ -1261,6 +1370,8 @@ function startLoad(path, quiet = false) {
             if (Array.isArray(tr.params)) setParam('tpset', `${t} ${tr.params.filter(Number.isFinite).join(',')}`);
             if (tr.mute) setParam('mute', `${t} 1`);
             if (tr.solo) setParam('solo', `${t} 1`);
+            soundName[t] = typeof tr.sound === 'string' ? tr.sound.slice(0, 14) : 'INIT';
+            soundEdited[t] = !!tr.edited;
         });
         for (const [c, hex] of Object.entries(tr.clips || {})) {
             tasks.push(() => { if (/^[0-9a-f]+$/i.test(hex)) setParam('cload', `${t} ${c} ${hex}`); });
@@ -1331,13 +1442,116 @@ function userSounds() {
     return out;
 }
 
-function loadSound(snd) {
-    const cur = ints(getParam(`tp:${track}`));
+/* put a sound on a track (its MIDI routing is kept) */
+function applySound(t, snd) {
+    const cur = ints(getParam(`tp:${t}`));
     const p = snd.params.slice(0, NPARAMS).map((v, i) => (i === P_MCH || i === P_MOUT) && Number.isFinite(cur[i]) ? cur[i] : v);
-    if (p.length !== NPARAMS || !p.every(Number.isFinite)) { showFlash('BAD SOUND FILE'); return; }
-    setParam('tpset', `${track} ${p.join(',')}`);
+    if (p.length !== NPARAMS || !p.every(Number.isFinite)) { showFlash('BAD SOUND FILE'); return false; }
+    setParam('tpset', `${t} ${p.join(',')}`);
+    soundName[t] = String(snd.name || 'SOUND').slice(0, 14);
+    soundEdited[t] = false;
+    pullTrack(t);
+    return true;
+}
+
+function loadSound(snd) {
+    if (applySound(track, snd)) showFlash(`T${track + 1}: ${snd.name}`);
+}
+
+/* ---------- sound browser ----------
+ * Turn the jog: the highlighted sound plays on the track straight away.
+ * Left/Right: category. Jog click: keep it. Back or Menu: put the old sound back. */
+const SOUND_CATS = ['DRUMS', 'BASS', 'KEYS', 'LEAD', 'PAD', 'FX', 'USER'];
+let browser = null;
+
+function openBrowser() {
+    const starters = starterSounds(), users = userSounds();
+    const cats = SOUND_CATS.map(c => ({ name: c, items: c === 'USER' ? users : starters.filter(x => x.cat === c) }))
+        .filter(c => c.items.length);
+    if (!cats.length) { showFlash('NO SOUNDS FOUND'); return; }
+    let ci = 0, ii = 0;
+    cats.forEach((c, a) => c.items.forEach((x, b) => { if (x.name === soundName[track]) { ci = a; ii = b; } }));
+    browser = { cats, ci, ii, orig: ints(getParam(`tp:${track}`)), origName: soundName[track], origEdited: soundEdited[track] };
+    menuOpen = false;
+    dirty = true;
+}
+
+function browserPreview() {
+    const x = browser.cats[browser.ci].items[browser.ii];
+    if (x) applySound(track, x);
+    dirty = true;
+}
+function browserMove(d) {
+    const n = browser.cats[browser.ci].items.length;
+    const ii = clamp(browser.ii + d, 0, n - 1);
+    if (ii === browser.ii) return;
+    browser.ii = ii;
+    browserPreview();
+}
+function browserCat(d) {
+    const ci = clamp(browser.ci + d, 0, browser.cats.length - 1);
+    if (ci === browser.ci) return;
+    browser.ci = ci; browser.ii = 0;
+    browserPreview();
+}
+function browserKeep() {
+    /* the click always means "this one": load it if it is not the one playing */
+    const x = browser.cats[browser.ci].items[browser.ii];
+    if (x && (soundName[track] !== x.name || soundEdited[track])) applySound(track, x);
+    browser = null;
+    showFlash(`T${track + 1}: ${soundName[track]}`);
+}
+function browserCancel() {
+    const b = browser;
+    browser = null;
+    if (b.orig.length === NPARAMS && b.orig.every(Number.isFinite)) setParam('tpset', `${track} ${b.orig.join(',')}`);
+    soundName[track] = b.origName;
+    soundEdited[track] = b.origEdited;
     pullTrack(track);
-    showFlash(`T${track + 1}: ${snd.name}`);
+    showFlash('KEPT THE OLD SOUND');
+}
+
+function drawBrowser() {
+    const b = browser, cat = b.cats[b.ci];
+    fill_rect(0, 0, 128, 10, 1);
+    print(2, 1, `T${track + 1} SOUNDS`, 0);
+    const pos = `${b.ii + 1}/${cat.items.length}`;
+    print(126 - text_width(pos), 1, pos, 0);
+    /* category line with arrows when there is more to the left/right */
+    const tabs = `${b.ci > 0 ? '< ' : '  '}${cat.name}${b.ci < b.cats.length - 1 ? ' >' : ''}`;
+    print(64 - (text_width(tabs) >> 1), 12, tabs, 1);
+    const first = clamp(b.ii - 1, 0, Math.max(0, cat.items.length - 3));
+    for (let r = 0; r < 3 && first + r < cat.items.length; r++) {
+        const i = first + r, y = 22 + r * 10;
+        const label = cat.items[i].name;
+        if (i === b.ii) { fill_rect(0, y - 1, 128, 10, 1); print(4, y, label, 0); }
+        else print(4, y, label, 1);
+    }
+    print(2, 56, 'Click keep  Back undo', 1);
+}
+
+/* a starter kit so a new project makes sound straight away */
+const DEFAULT_KIT = ['KICK DEEP', 'SNARE', 'HAT CLOSED', 'CLAP', 'FM BASS', 'E-PIANO', 'SUPERSAW', 'VOX PAD'];
+function applyDefaultKit() {
+    const starters = starterSounds();
+    DEFAULT_KIT.forEach((name, t) => {
+        const x = starters.find(y => y.name === name);
+        if (x) applySound(t, x);
+    });
+    for (let t = DEFAULT_KIT.length; t < TRACKS; t++) { soundName[t] = 'INIT'; soundEdited[t] = false; }
+    projectDirty = false;
+}
+
+/* Back: one level up, from wherever you are */
+function goBack() {
+    if (browser) { browserCancel(); return; }
+    if (menuOpen) {
+        if (menuMode !== 'main') { menuMode = 'main'; buildMenu(); } else menuOpen = false;
+    } else if (clipMode) clipMode = false;
+    else if (mixer) mixer = false;
+    else if (songView) toggleSongView();
+    else if (page !== 0) page = 0;
+    dirty = true;
 }
 
 function saveSound() {
@@ -1351,21 +1565,12 @@ function saveSound() {
 }
 
 function buildMenu() {
-    if (menuMode === 'sounds') {
-        menuItems = [
-            { label: '< BACK', act: () => { menuMode = 'main'; menuOpen = true; buildMenu(); } },
-            { label: `SAVE T${track + 1} SOUND`, act: saveSound },
-            ...starterSounds().map(x => ({ label: x.name, keep: true, act: () => loadSound(x) })),
-            ...userSounds().map(x => ({ label: `* ${x.name}`, keep: true, act: () => loadSound(x) })),
-        ];
-        menuIndex = clamp(menuIndex, 0, menuItems.length - 1);
-        return;
-    }
     menuItems = [
-        { label: `SOUNDS (T${track + 1})`, act: () => { menuMode = 'sounds'; menuIndex = 2; menuOpen = true; buildMenu(); } },
+        { label: `BROWSE SOUNDS (T${track + 1})`, act: openBrowser },
+        { label: `SAVE T${track + 1} SOUND`, act: saveSound },
         { label: `SAVE ${projectName}`, act: () => startSave(`${PROJECT_DIR}/${projectName}.json`, projectName) },
         { label: 'SAVE AS NEW', act: () => { projectName = nextProjectName(); startSave(`${PROJECT_DIR}/${projectName}.json`, projectName); } },
-        { label: 'NEW PROJECT', confirm: true, act: () => { setParam('reset', 1); projectName = nextProjectName(); afterReset(); showFlash('NEW PROJECT'); } },
+        { label: 'NEW PROJECT', confirm: true, act: () => { setParam('reset', 1); projectName = nextProjectName(); afterReset(); applyDefaultKit(); showFlash('NEW PROJECT'); } },
         ...listProjects().map(n => ({ label: `LOAD ${n}`, confirm: true, act: () => startLoad(`${PROJECT_DIR}/${n}.json`) })),
     ];
     menuIndex = clamp(menuIndex, 0, menuItems.length - 1);
@@ -1425,8 +1630,8 @@ globalThis.init = function () {
     pullMix();
     pullClips();
     pullRec();
-    /* a fresh start restores the last session */
-    startLoad(AUTOSAVE, true);
+    /* a fresh start restores the last session, or begins with a starter kit */
+    if (!startLoad(AUTOSAVE, true)) applyDefaultKit();
     playing = getParam('play') === '1';
     ledCache.clear();
     dirty = true;
@@ -1450,6 +1655,7 @@ globalThis.onUnload = function () {
 globalThis.tick = function () {
     tickCount++;
     if (touchedKnob >= 0 && tickCount === touchedUntil) dirty = true;
+    if (tickCount === pageListUntil) dirty = true;
     if (tickCount % 8 === 0 && playing) {
         const p = ints(getParam('pos'));
         if (p.length === TRACKS && p[track] !== playheads[track]) dirty = true;
@@ -1485,6 +1691,8 @@ globalThis.__opgrid = {
     clipStates, editClips, LAUNCH_QS,
     state: () => ({ track, page, octave, shift, playing, stepPage, tempo, sync, mixer, mixBank,
         clipMode, trackBank, sceneBank, launchQ, recArmed, countingIn, growTrack, recQuant, recMode,
+        browser: browser ? { cat: browser.cats[browser.ci].name, item: browser.cats[browser.ci].items[browser.ii].name } : null,
+        soundName: [...soundName], soundEdited: [...soundEdited], touchHeld,
         clickMode, menuOpen, job: !!job, projectName, projectDirty, menuItems: menuItems.map(m => m.label),
         songView, song, songSel, songRows: JSON.parse(JSON.stringify(songRows)), songLoop, songOn, songRow, capturing }),
     tick: n => { for (let i = 0; i < n; i++) globalThis.tick(); },

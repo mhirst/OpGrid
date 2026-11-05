@@ -2,7 +2,7 @@
 
 A 16-track FM groovebox for Ableton Move, built as a [Schwung](https://github.com/charlesvestal/schwung) overtake module: four synth machines, a step sequencer with per-step locks and conditions, clip launching, live recording, song mode, effects, and a starter sound library.
 
-**Status: 0.9.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
+**Status: 0.10.0 beta.** Every feature in the spec is built and covered by automated tests (engine, sequencer, effects, clips, recording, songs, machines, starter sounds, UI, and the UI running against the real engine). **It has not yet been run on a real Move**, so treat this as a beta and please report what you find.
 
 | | | |
 |---|---|---|
@@ -19,7 +19,21 @@ make test               # all tests; also writes demo WAVs to build/
 MOVE_HOST=ableton@move.local ./scripts/install.sh
 ```
 
-Requires Schwung on the Move. Then open OpGrid from Schwung's overtake modules. On-device help: Schwung's Help viewer, under Modules.
+Requires Schwung on the Move.
+
+- **Open (or quit):** hold **Shift**, touch the **volume knob**, click the **jog wheel**, then choose OpGrid.
+- **Leave it running:** Shift + touch volume + **Back**. Open it again the same way to come back.
+- On-device help: Schwung's Help viewer, under Modules → OpGrid.
+
+## First minutes
+
+A new project starts with a kit: kick, snare, hat, clap, bass, keys, lead and pad on tracks 1–8.
+
+1. Press **Play**, tap step buttons.
+2. **Shift + pad** (bottom row) picks a track. The screen's top line shows the track and its sound.
+3. **Click the jog wheel** to browse sounds: turn to hear each one, Left/Right for DRUMS / BASS / KEYS / LEAD / PAD / FX / USER, click to keep, **Back** to put the old one back.
+4. **Touch any knob** to see what it does, in words, with its value in Hz, ms, % or dB.
+5. **Turn the jog** to change page; a list shows where you are.
 
 ## Controls
 
@@ -45,10 +59,12 @@ Requires Schwung on the Move. Then open OpGrid from Schwung's overtake modules. 
 | Mute (tap) | Mixer mode on / off |
 | Shift + Mute (hold) | Fill mode |
 | Knobs 1–8 | Edit the page's 8 values (Shift = fine) |
-| Jog wheel / Left / Right | Change page: machine (2 pages), FILTER, AMP, LFO 1–3, SEND, STEP, CLIP, FX 1, FX 2 |
+| Jog wheel / Left / Right | Change page: SOUND, SOUND 2, FILTER, AMP, LFO 1–3, DELAY, REVERB, CHORUS, MASTER, MIDI, STEP, CLIP |
 | Shift + jog | Change the track's machine (on a sound page) |
 | Up / Down | Octave |
-| Back | Leave; music keeps playing. Shift + Vol touch + Jog click exits fully |
+| Back | Close the current screen (browser, menu, clip grid, mixer, song view) |
+| Jog click (sound pages) | Sound browser |
+| Touch a knob | Show its full name and value |
 
 External MIDI: channel N plays track N.
 
@@ -97,11 +113,15 @@ While the song plays, the clip grid shows what is playing but does not launch; S
 
 ### Projects
 
-**Menu** opens: SOUNDS, SAVE (current name), SAVE AS NEW, NEW PROJECT, and LOAD for each saved project. NEW and LOAD ask for a second click. Projects (including songs) are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`, and reopens from it next time.
+**Menu** opens: BROWSE SOUNDS, SAVE Tn SOUND, SAVE (current name), SAVE AS NEW, NEW PROJECT (starts with the starter kit), and LOAD for each saved project. NEW and LOAD ask for a second click. Projects (including songs) are JSON files in `/data/UserData/schwung/opgrid/projects/`. The session autosaves every 2 minutes when something changed and when the module closes, to `/data/UserData/schwung/opgrid/autosave.json`, and reopens from it next time.
 
 ### Sounds
 
-**Menu → SOUNDS** lists the 32 starter sounds (drums, basses, keys, leads, pads, effects) and your own (marked `*`). A click loads the sound onto the selected track and keeps the list open, so you can play the pads and try the next one. **SAVE Tn SOUND** saves the track's sound to `/data/UserData/schwung/opgrid/sounds/`. A sound is the machine and every sound, LFO and send setting; the track's MIDI routing is kept.
+**Jog click** on a sound page (or **Menu → BROWSE SOUNDS**) opens the browser: 32 starter sounds in DRUMS, BASS, KEYS, LEAD, PAD and FX, plus your own under USER. Turning the jog loads each sound on the track as you go, so you hear it (play pads or let the pattern run). **Left/Right** changes category, **click** keeps the highlighted sound, **Back** or **Menu** puts the old sound back exactly. The top line of the screen always shows the track's sound; a `*` means you have changed it since loading. **Menu → SAVE Tn SOUND** saves it to `/data/UserData/schwung/opgrid/sounds/` (it appears under USER). A sound is the machine and every sound, LFO and send setting; the track's MIDI routing is kept.
+
+### Effects
+
+DELAY, REVERB and CHORUS are shared by all 16 tracks; their pages say **ALL TRACKS** at the top. **Knob 8 (SEND)** on each is the selected track's send to that effect. MASTER has the compressor, drive and volume for the whole mix. Effects can't be locked to steps (sends can).
 
 ### Mixer mode (tap Mute)
 
@@ -115,9 +135,11 @@ While the song plays, the clip grid shows what is playing but does not launch; S
 
 - **STEP** (hold a step): type (note / lock-only), note, velocity, length, micro-timing (±23/48 step), ratchets (1–8), condition, slide. With no step held, NOTE/VEL/LEN set the defaults for new steps.
 - **LFO 1–3** (per track, lockable): destination (pitch, any sound value or send), wave (sine, triangle, square, saw, ramp, random), sync or free, rate, depth (±), trigger (free-running or restart per note), phase, fade-in.
-- **SEND**: delay, reverb and chorus sends; MIDI channel (OFF or 1–16) and mode (INT = internal sound only, EXT = MIDI to USB-A only, BOTH).
-- **FX 1** (global): delay time (synced, 1/32 to 1 bar, dotted and triplet), feedback, ping-pong, tone (low-pass ↔ high-pass); reverb size, decay, pre-delay, damping.
-- **FX 2** (global): chorus depth, rate, width; master compressor threshold, ratio, makeup gain; master drive and volume.
+- **DELAY** (shared): time (synced, 1/32 to 1 bar, dotted and triplet), repeats, ping-pong, tone (darker ↔ brighter), and this track's SEND.
+- **REVERB** (shared): size, decay time, pre-delay, darkness, SEND.
+- **CHORUS** (shared): depth, speed, stereo width, SEND.
+- **MASTER**: compressor threshold, ratio, makeup gain; drive; master volume.
+- **MIDI**: MIDI out channel (OFF or 1–16) and what plays (INT = internal sound, MIDI = USB-A only, BOTH).
 - **CLIP**: length (1–64), speed (1/8x–2x), swing (50–80%), tempo, tempo source (MOVE = follow Move's tempo, OWN = this module's), launch quantize, record quantize (RQNT), record mode (RMOD: DUB / RPLC).
 
 ### Step conditions

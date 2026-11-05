@@ -35,6 +35,17 @@ const R = { '0.5': 1, 1: 3, 1.5: 4, 2: 5, 3: 7, 3.5: 8, 4: 9, 5: 10, 6: 11, 7: 1
 const DEST = id => 2 + id;
 const RATE = idx => Math.floor(idx * 128 / 17) + 1;   /* 0 = 8 bars ... 14 = 1/16 */
 
+/* browser category for each sound */
+const CAT = {
+    DRUMS: ['KICK DEEP', 'KICK PUNCH', 'KICK LONG', 'SNARE', 'CLAP', 'HAT CLOSED', 'HAT OPEN', 'TOM', 'RIM', 'METAL'],
+    BASS: ['FM BASS', 'SUB BASS', 'MORPH BASS'],
+    KEYS: ['E-PIANO', 'BELL', 'ORGAN', 'PLUCK', 'MARIMBA', 'RING KEYS'],
+    LEAD: ['SQUELCH', 'BRASS', 'PD LEAD', 'HOLLOW', 'SUPERSAW', 'BIG STAB'],
+    PAD: ['GLASS PAD', 'VOX PAD', 'STRINGS', 'SQUARE PAD', 'SOFT CHOIR'],
+    FX: ['DRONE', 'RISER'],
+};
+const catOf = name => Object.keys(CAT).find(c => CAT[c].includes(name));
+
 function sound(name, machine, mp, shared = {}) {
     const m = M[machine];
     const p = [...dump];
@@ -50,7 +61,9 @@ function sound(name, machine, mp, shared = {}) {
         p[P[k]] = v;
     }
     if (name.length > 14) throw new Error(`${name}: name longer than 14`);
-    return { name, params: p };
+    const cat = catOf(name);
+    if (!cat) throw new Error(`${name}: no category`);
+    return { name, cat, params: p };
 }
 
 const SOUNDS = [

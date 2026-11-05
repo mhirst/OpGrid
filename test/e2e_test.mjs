@@ -8,7 +8,7 @@ const check = (c, m) => { if (!c) { failures++; console.log('FAIL', m); } };
 const h = await startHost();
 const { ui } = h;
 const step = i => { h.note(16 + i); h.noteOff(16 + i); };
-const jogTo = p => { let n = 0; while (ui.state().page !== p && n++ < 20) h.midi(0xB0, 14, 1); };
+const jogTo = p => { let n = 0; while (ui.state().page !== p && n++ < 30) h.midi(0xB0, 14, ui.state().page < p ? 1 : 127); };
 globalThis.init();
 h.tick(40);
 
@@ -24,7 +24,7 @@ check(h.call('G locks:0:4') === '16=90', `real lock: ${h.call('G locks:0:4')}`);
 h.files.set('/data/UserData/schwung/modules/overtake/opgrid/sounds.json',
     (await import('fs')).readFileSync(new URL('../module/sounds.json', import.meta.url), 'utf8'));
 h.midi(0xB0, 49, 127); h.note(69); h.noteOff(69); h.midi(0xB0, 49, 0);       /* select track 2 */
-h.cc(50); h.midi(0xB0, 3, 127); h.midi(0xB0, 3, 127); h.cc(50);               /* SOUNDS > first sound */
+jogTo(0); h.tick(400); h.midi(0xB0, 3, 127); h.midi(0xB0, 3, 127);             /* browse, keep the first drum */
 check(h.call('G tp:1').split(',')[61] === '1', 'track 2 is now FM Perc in the engine');
 step(2); step(10);
 
@@ -45,14 +45,14 @@ h.cc(85);
 /* a song row, tempo and an effect, then save */
 h.midi(0xB0, 49, 127); h.cc(58); h.midi(0xB0, 49, 0);
 h.tick(4); h.midi(0xB0, 3, 127); h.midi(0xB0, 49, 127); h.cc(58); h.midi(0xB0, 49, 0);
-jogTo(11); h.knob(0, 7);                               /* chorus depth */
-jogTo(9); h.knob(3, 4);                                /* tempo 124 */
+jogTo(9); h.knob(0, 7);                                /* chorus depth */
+jogTo(13); h.knob(3, 4);                               /* tempo 124 */
 const before = {
     steps0: h.call('G steps:0'), steps1: h.call('G steps:1'), tp1: h.call('G tp:1'),
     locks: h.call('G locks:0:4'), fx: h.call('G fx'), tempo: h.call('G tempo'), slens: h.call('G slens'),
     sdump: h.call('G sdump:0'),
 };
-h.cc(50); h.midi(0xB0, 14, 1); h.midi(0xB0, 3, 127);   /* Menu > SAVE */
+h.cc(50); h.midi(0xB0, 14, 1); h.midi(0xB0, 14, 1); h.midi(0xB0, 3, 127);   /* Menu > SAVE */
 h.tick(300);
 const file = [...h.files.keys()].find(k => k.includes('/projects/'));
 check(!!file, 'project saved');
@@ -61,7 +61,7 @@ check(!!file, 'project saved');
 h.call('S reset\t1');
 check(h.call('G steps:0').startsWith('0000'), 'engine reset');
 h.cc(50);
-for (let i = 0; i < 4; i++) h.midi(0xB0, 14, 1);
+for (let i = 0; i < 5; i++) h.midi(0xB0, 14, 1);
 h.midi(0xB0, 3, 127); h.midi(0xB0, 3, 127);            /* LOAD, confirm */
 h.tick(400);
 const after = {

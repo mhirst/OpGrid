@@ -177,7 +177,7 @@ const ui = globalThis.__opgrid;
 const midi = (...d) => globalThis.onMidiMessageInternal(d);
 const ticks = n => { for (let i = 0; i < n; i++) globalThis.tick(); };
 const lastSet = k => [...sets].reverse().find(s => s[0] === k);
-const jogTo = target => { let n = 0; while (globalThis.__opgrid.state().page !== target && n++ < 20) midi(0xB0, 14, 1); };
+const jogTo = target => { let n = 0; while (globalThis.__opgrid.state().page !== target && n++ < 30) midi(0xB0, 14, globalThis.__opgrid.state().page < target ? 1 : 127); };
 
 /* ---- tables must match the C engine ---- */
 const bin = path.join(root, 'build/engine_test');
@@ -213,6 +213,9 @@ for (const line of mdump) {
         check(typeof t === 'string' && t.length <= 5, `machine ${m} pid ${pid} formats ${v} as "${t}"`);
     }
 }
+/* full names (shown on knob touch) fit the 120 px readout even at 6 px a character */
+for (const e of [...ui.PARAMS, ...ui.MACH_PARAMS.filter(Boolean).flat()]) check(e[1].length <= 20, `long name too long: "${e[1]}"`);
+for (const e of ui.FX) check(e[4] && e[4].length <= 20, `fx long name: "${e[4]}"`);
 /* every param formatter fits a 5-char cell, with sync on and off */
 ui.PARAMS.forEach((p, i) => {
     for (const v of [0, Math.floor(p[2] / 2), p[2]]) for (const sync of [0, 1]) {
@@ -285,8 +288,8 @@ midi(0x80, 20, 0);
 check(dsp.steps[0][4][1] === 50 && dsp.steps[0][4][2] === 51, `chord notes: ${dsp.steps[0][4].slice(1, 5)}`);
 
 /* STEP page: hold step, knob 7 (COND) */
-jogTo(8);
-check(ui.state().page === 8, `step page: ${ui.state().page}`);
+jogTo(12);
+check(ui.state().page === 12, `step page: ${ui.state().page}`);
 midi(0x90, 20, 100);
 for (let i = 0; i < 7; i++) midi(0xB0, 77, 1);
 midi(0xB0, 75, 1); midi(0xB0, 75, 1);                       /* MICRO +2 */
@@ -309,8 +312,8 @@ midi(0xB0, 119, 127); midi(0x90, 25, 100); midi(0x80, 25, 0); midi(0xB0, 119, 0)
 check(dsp.steps[0][9][0] === 0, 'delete + step clears');
 
 /* CLIP page: length 32, then Shift+step 2 pages */
-jogTo(9);
-check(ui.state().page === 9, 'clip page');
+jogTo(13);
+check(ui.state().page === 13, 'clip page');
 midi(0xB0, 49, 127); midi(0x90, 17, 100); midi(0xB0, 49, 0);
 check(ui.state().stepPage === 0, 'cannot page past clip length');
 for (let i = 0; i < 16; i++) midi(0xB0, 71, 1);
@@ -343,15 +346,25 @@ sets.length = 0;
 midi(0xB0, 71, 1);                                        /* DEST +1 */
 check(lastSet('p')?.[1] === `${ui.state().track} 32 ${Math.min(36, dsp.params[ui.state().track][32])}`, `lfo dest edit: ${JSON.stringify(lastSet('p'))}`);
 ticks(8);
-jogTo(10);
-check(ui.state().page === 10, 'FX 1 page');
-midi(0xB0, 75, 5);                                        /* SIZE +5 */
-check(dsp.fx[4] === 85, `reverb size: ${dsp.fx[4]}`);
+jogTo(7);
+check(ui.state().page === 7, 'DELAY page');
 midi(0xB0, 71, 1);                                        /* delay time +1 (stepped) */
 check(dsp.fx[0] === 8, `delay time: ${dsp.fx[0]}`);
-jogTo(11);
-midi(0xB0, 78, 127);                                       /* master vol -1 */
+sets.length = 0;
+const sendBefore = ui.values[ui.state().track][56];
+midi(0xB0, 78, 10);                                       /* knob 8 on an effect page = this track's send */
+check(lastSet('p')?.[1] === `${ui.state().track} 56 ${Math.min(127, sendBefore + 10)}`, `delay send on the delay page: ${JSON.stringify(lastSet('p'))}`);
+jogTo(8);
+midi(0xB0, 71, 5);                                        /* REVERB page: SIZE +5 */
+check(dsp.fx[4] === 85, `reverb size: ${dsp.fx[4]}`);
+jogTo(10);
+midi(0xB0, 75, 127);                                       /* MASTER page knob 5: volume -1 */
 check(dsp.fx[15] === 99, `master vol: ${dsp.fx[15]}`);
+/* effects are shared: holding a step does not lock them */
+sets.length = 0;
+jogTo(7);
+midi(0x90, 20, 100); midi(0xB0, 72, 1); midi(0x80, 20, 0);
+check(!sets.some(x => x[0] === 'lock' || x[0] === 'fx'), 'no lock on a shared effect');
 ticks(8);
 
 /* mixer: tap Mute */
@@ -412,7 +425,7 @@ for (let i = 0; i < 300; i++) globalThis.tick();          /* draw grid with blin
 midi(0xB0, 71, 1); ticks(8);                               /* knob in clip mode shows the page briefly */
 midi(0xB0, 58, 127); midi(0xB0, 58, 0);
 check(!ui.state().clipMode, 'Loop leaves clip mode');
-jogTo(9);
+jogTo(13);
 midi(0xB0, 76, 1);                                          /* CLIP page knob 6 = launch quantize */
 check(dsp.lq === 4, `launch quantize 2 bars: ${dsp.lq}`);
 
@@ -509,31 +522,51 @@ midi(0xB0, 49, 127); midi(0xB0, 14, 1); midi(0xB0, 49, 0);
 check(lastSet('mach')?.[1] === `${ui.state().track} 1`, `Shift+jog selects FM Perc: ${JSON.stringify(lastSet('mach'))}`);
 dsp.params[ui.state().track][61] = 0;                        /* fake DSP: back to FM Poly */
 
-/* sound library: starter sounds from the module dir, user sounds saved per track */
+/* sound browser: jog click on a sound page; turning previews, click keeps, Back restores */
 globalThis.__files.set('/data/UserData/schwung/modules/overtake/opgrid/sounds.json',
     fs.readFileSync(path.join(root, 'module/sounds.json'), 'utf8'));
-midi(0xB0, 50, 127);                                          /* Menu */
-check(ui.state().menuItems[0].startsWith('SOUNDS'), `menu starts with SOUNDS: ${ui.state().menuItems[0]}`);
-midi(0xB0, 3, 127);                                           /* open sounds */
-const items = ui.state().menuItems;
-check(items[0] === '< BACK' && items[1].startsWith('SAVE T') && items.includes('KICK DEEP') && items.length >= 34,
-      `sound list: ${items.slice(0, 5)} ... (${items.length})`);
-check(ui.state().menuItems[0] === '< BACK', 'sound list');
+jogTo(0);
+ticks(400);
+midi(0xB0, 3, 127);                                           /* jog click opens the browser */
+check(ui.state().browser && ui.state().browser.cat === 'DRUMS', `browser opens on DRUMS: ${JSON.stringify(ui.state().browser)}`);
 sets.length = 0;
-midi(0xB0, 3, 127);                                           /* cursor starts on the first starter sound */
+midi(0xB0, 14, 1);                                            /* next sound: previews at once */
 const tp = lastSet('tpset');
 check(tp && tp[1].split(' ')[1].split(',').length === 64 && tp[1].split(' ')[1].split(',')[61] === '1',
-      `loading KICK DEEP sends all params with machine FM Perc: ${tp && tp[1].slice(0, 30)}`);
-check(ui.state().menuOpen, 'sound list stays open to audition the next one');
-midi(0xB0, 14, 127);                                          /* up to SAVE */
-midi(0xB0, 3, 127);
-check([...globalThis.__files.keys()].some(k => k.startsWith('/data/UserData/schwung/opgrid/sounds/SOUND 01')), 'track sound saved');
-check(!ui.state().menuOpen, 'saving a sound closes the menu');
-midi(0xB0, 50, 127);                                          /* reopen: user sound listed with a star */
-midi(0xB0, 3, 127);
-check(ui.state().menuItems.includes('* SOUND 01'), 'user sound listed');
+      `turning loads the next drum sound (FM Perc): ${tp && tp[1].slice(0, 30)}`);
+check(ui.state().soundName[ui.state().track] === 'KICK PUNCH', `track shows the sound name: ${ui.state().soundName[ui.state().track]}`);
+midi(0xB0, 63, 127);                                          /* Right: next category */
+check(ui.state().browser.cat === 'BASS' && ui.state().browser.item === 'FM BASS', `category: ${JSON.stringify(ui.state().browser)}`);
+ticks(8);
+midi(0xB0, 3, 127);                                           /* click keeps it */
+check(!ui.state().browser && ui.state().soundName[ui.state().track] === 'FM BASS', 'kept FM BASS');
+const keptParams = [...dsp.params[ui.state().track]];
+midi(0xB0, 3, 127); midi(0xB0, 14, 1); midi(0xB0, 14, 1);     /* browse away ... */
+check(ui.state().soundName[ui.state().track] !== 'FM BASS', 'previewing another sound');
+midi(0xB0, 51, 127);                                          /* ... then Back: put FM BASS back */
+check(!ui.state().browser && ui.state().soundName[ui.state().track] === 'FM BASS'
+      && JSON.stringify(dsp.params[ui.state().track]) === JSON.stringify(keptParams), 'Back restores the previous sound exactly');
+/* editing marks the sound as changed (shown with a *) */
+midi(0xB0, 71, 1);
+check(ui.state().soundEdited[ui.state().track], 'edit marks the sound changed');
+/* save the track sound from the menu; it shows up under USER */
 midi(0xB0, 50, 127);
-check(!ui.state().menuOpen, 'Menu closes');
+check(ui.state().menuItems[0].startsWith('BROWSE SOUNDS') && ui.state().menuItems[1].startsWith('SAVE T'), `menu: ${ui.state().menuItems.slice(0, 3)}`);
+midi(0xB0, 14, 1); midi(0xB0, 3, 127);
+check([...globalThis.__files.keys()].some(k => k.startsWith('/data/UserData/schwung/opgrid/sounds/SOUND 01')), 'track sound saved');
+midi(0xB0, 3, 127);                                           /* browse again */
+for (let i = 0; i < 8; i++) midi(0xB0, 63, 127);
+check(ui.state().browser.cat === 'USER' && ui.state().browser.item === 'SOUND 01', `user sound listed: ${JSON.stringify(ui.state().browser)}`);
+midi(0xB0, 50, 127);                                          /* Menu cancels too */
+check(!ui.state().browser, 'Menu closes the browser');
+/* knob touch shows the full name; Back leaves modes */
+midi(0x90, 0, 127); ticks(8);
+check(ui.state().touchHeld === 0, 'knob touch tracked');
+midi(0x80, 0, 0);
+midi(0xB0, 58, 127); midi(0xB0, 58, 0);
+check(ui.state().clipMode, 'clip grid');
+midi(0xB0, 51, 127);
+check(!ui.state().clipMode, 'Back leaves the clip grid');
 
 /* regression: FILTER page knob 1 (cutoff, 0-127) must use acceleration */
 jogTo(2);
@@ -545,8 +578,8 @@ check(dsp.params[ui.state().track][16] === Math.min(127, before + 5), `cutoff kn
 dsp.params[3][16] = 77; dsp.fx[4] = 55; dsp.tempo = 101; dsp.clips[3][2] = 1;
 dsp.cdumps.set('3:2', 'deadbeef00');
 midi(0xB0, 50, 127);
-check(ui.state().menuOpen && ui.state().menuItems[1].startsWith('SAVE'), `menu opens: ${ui.state().menuItems}`);
-midi(0xB0, 14, 1);
+check(ui.state().menuOpen && ui.state().menuItems[2].startsWith('SAVE PROJECT'), `menu opens: ${ui.state().menuItems}`);
+midi(0xB0, 14, 1); midi(0xB0, 14, 1);
 midi(0xB0, 3, 127);                                          /* SAVE */
 check(!ui.state().menuOpen && ui.state().job, 'save runs as a job');
 ticks(200);
@@ -562,15 +595,16 @@ check(!ui.state().projectDirty, 'save clears the dirty flag');
 
 /* change things, then load the project back */
 midi(0xB0, 50, 127);
-midi(0xB0, 14, 1); midi(0xB0, 14, 1); midi(0xB0, 14, 1);    /* NEW PROJECT */
-check(ui.state().menuItems[3] === 'NEW PROJECT', `menu has NEW PROJECT: ${ui.state().menuItems}`);
+for (let i = 0; i < 4; i++) midi(0xB0, 14, 1);               /* NEW PROJECT */
+check(ui.state().menuItems[4] === 'NEW PROJECT', `menu has NEW PROJECT: ${ui.state().menuItems}`);
 midi(0xB0, 3, 127);
 check(ui.state().menuOpen, 'destructive items need a second click');
 midi(0xB0, 3, 127);
-check(logHas('reset') && dsp.params[3][16] === 0, 'new project resets');
+check(logHas('reset') && ui.state().soundName[0] === 'KICK DEEP' && ui.state().soundName[4] === 'FM BASS',
+      `new project starts with the starter kit: ${ui.state().soundName.slice(0, 8)}`);
 midi(0xB0, 50, 127);
-midi(0xB0, 14, 1); midi(0xB0, 14, 1); midi(0xB0, 14, 1); midi(0xB0, 14, 1);   /* first LOAD entry */
-check(ui.state().menuItems[4]?.startsWith('LOAD '), `load entry listed: ${ui.state().menuItems[4]}`);
+for (let i = 0; i < 5; i++) midi(0xB0, 14, 1);               /* first LOAD entry */
+check(ui.state().menuItems[5]?.startsWith('LOAD '), `load entry listed: ${ui.state().menuItems[5]}`);
 midi(0xB0, 3, 127); midi(0xB0, 3, 127);
 ticks(200);
 check(dsp.params[3][16] === 77 && dsp.fx[4] === 55 && dsp.tempo === 101, `load restores params/fx/tempo: ${dsp.params[3][16]} ${dsp.fx[4]} ${dsp.tempo}`);
